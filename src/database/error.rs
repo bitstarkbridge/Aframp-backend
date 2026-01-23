@@ -214,6 +214,62 @@ impl fmt::Display for DatabaseError {
 
 impl std::error::Error for DatabaseError {}
 
+// Convert to AppError for unified error handling
+#[cfg(feature = "database")]
+impl From<DatabaseError> for crate::error::AppError {
+    fn from(err: DatabaseError) -> Self {
+        use crate::error::{AppError, AppErrorKind, DomainError, InfrastructureError};
+        
+        let kind = match &err.kind {
+            DatabaseErrorKind::NotFound { entity, id } => {
+                // Map to appropriate domain error
+                if entity.to_lowercase().contains("wallet") {
+                    AppErrorKind::Domain(DomainError::WalletNotFound {
+                        wallet_address: id.clone(),
+                    })
+                } else if entity.to_lowercase().contains("transaction") {
+                    AppErrorKind::Domain(DomainError::TransactionNotFound {
+                        transaction_id: id.clone(),
+                    })
+                } else {
+                    AppErrorKind::Domain(DomainError::TransactionNotFound {
+                        transaction_id: id.clone(),
+                    })
+                }
+            }
+            DatabaseErrorKind::InsufficientBalance { available, required } => {
+                AppErrorKind::Domain(DomainError::InsufficientBalance {
+                    available: available.clone(),
+                    required: required.clone(),
+                })
+            }
+            DatabaseErrorKind::TrustlineNotFound { account, asset } => {
+                AppErrorKind::Domain(DomainError::TrustlineNotFound {
+                    wallet_address: account.clone(),
+                    asset: asset.clone(),
+                })
+            }
+            DatabaseErrorKind::UniqueConstraintViolation { .. } => {
+                AppErrorKind::Domain(DomainError::DuplicateTransaction {
+                    transaction_id: "unknown".to_string(),
+                })
+            }
+            _ => {
+                AppErrorKind::Infrastructure(InfrastructureError::Database {
+                    message: err.to_string(),
+                    is_retryable: err.is_retryable(),
+                })
+            }
+        };
+        
+        let mut app_error = AppError::new(kind);
+        if let Some(context) = err.context {
+            app_error = app_error.with_context(context);
+        }
+        app_error
+    }
+}
+
 impl PartialEq for DatabaseError {
     fn eq(&self, other: &Self) -> bool {
         // For testing purposes

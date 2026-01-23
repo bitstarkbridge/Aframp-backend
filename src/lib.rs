@@ -1,15 +1,34 @@
-#![no_std]
+#![cfg_attr(not(feature = "database"), no_std)]
+
+// Import soroban SDK items only when not using database feature
+#[cfg(not(feature = "database"))]
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype,
     token, Address, Env, String, Symbol, Vec,
 };
-#![cfg_attr(not(feature = "database"), no_std)]
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, Symbol, String};
 
 // Database module requires std and specific dependencies
 #[cfg(feature = "database")]
 pub mod database;
 
+// Chains module for blockchain integrations
+#[cfg(feature = "database")]
+pub mod chains;
+
+// Error handling
+#[cfg(feature = "database")]
+pub mod error;
+
+// Logging and tracing
+#[cfg(feature = "database")]
+pub mod logging;
+
+// Middleware
+#[cfg(feature = "database")]
+pub mod middleware;
+
+// Contract error enum for Soroban (only when not using database feature)
+#[cfg(not(feature = "database"))]
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -26,6 +45,7 @@ pub enum Error {
     TransferFailed = 104,
 }
 
+#[cfg(not(feature = "database"))]
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OrderStatus {
@@ -37,6 +57,7 @@ pub enum OrderStatus {
     Cancelled,
 }
 
+#[cfg(not(feature = "database"))]
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Order {
@@ -54,6 +75,7 @@ pub struct Order {
     pub payment_method: String,
 }
 
+#[cfg(not(feature = "database"))]
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -67,9 +89,11 @@ pub enum DataKey {
     DisputeResolver,
 }
 
+#[cfg(not(feature = "database"))]
 #[contract]
 pub struct EscrowContract; 
 
+#[cfg(not(feature = "database"))]
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with admin settings
@@ -284,7 +308,7 @@ impl EscrowContract {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "database")))]
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _ , Ledger};

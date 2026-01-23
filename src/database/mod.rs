@@ -80,7 +80,7 @@ pub async fn init_pool(
 
 /// Connection pool health check
 pub async fn health_check(pool: &PgPool) -> Result<(), DatabaseError> {
-    let result = sqlx::query("SELECT 1")
+    let _result = sqlx::query("SELECT 1")
         .fetch_one(pool)
         .await
         .map_err(|e| {
@@ -113,7 +113,7 @@ mod tests {
     async fn test_pool_initialization() {
         let url = "postgres://user:password@localhost:5432/aframp";
         let config = PoolConfig::default();
-        let result = init_pool(url, Some(config)).await;
+        let _result = init_pool(url, Some(config)).await;
         // This test requires actual database to be running
         // assert!(result.is_ok());
     }
