@@ -521,18 +521,11 @@ docker run -p 8000:8000 --env-file .env aframp-backend
 
 ## Contributing
 
-1. Fork the repo
-2. Create feature branch
-3. Make changes
-4. Run `cargo fmt` and `cargo clippy`
-5. Ensure tests pass: `cargo test`
-6. Submit PR
+See our [contributing guide](./CONTRIBUTING.md) for detailed instructions on setting up your development environment, coding standards, testing guidelines, and pull request process.
 
-**Code standards:**
-- Follow Rust conventions
-- Add tests for new features
-- Update docs as needed
-- Keep PRs focused and small
+## Code of Conduct
+
+Please read our [Code of Conduct](./CODE_OF_CONDUCT.md) to understand the standards we expect from contributors.
 
 ## Resources
 
