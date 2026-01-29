@@ -2,7 +2,6 @@ mod cache;
 mod chains;
 mod database;
 mod error;
-use dotenv::dotenv;
 use axum::{
     routing::{get, post},
     Router,
@@ -11,6 +10,7 @@ use cache::{init_cache_pool, CacheConfig, RedisCache};
 use chains::stellar::client::StellarClient;
 use chains::stellar::config::StellarConfig;
 use database::{init_pool, PoolConfig};
+use dotenv::dotenv;
 use std::net::SocketAddr;
 use tracing::{error, info};
 
@@ -24,14 +24,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting Aframp backend service");
 
     // Initialize database connection pool
-    let database_url =
-        std::env::var("DATABASE_URL".to_string()).unwrap();
+    let database_url = std::env::var("DATABASE_URL".to_string()).unwrap();
     let db_pool = init_pool(&database_url, Some(PoolConfig::default())).await?;
     info!("Database connection pool initialized");
 
     // Initialize cache connection pool
-    let redis_url =
-        std::env::var("REDIS_URL".to_string()).unwrap();
+    let redis_url = std::env::var("REDIS_URL".to_string()).unwrap();
     let cache_config = CacheConfig {
         redis_url,
         ..Default::default()
@@ -100,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
-        .route("/api/stellar/account/:address", get(get_stellar_account))
+        .route("/api/stellar/account/{address}", get(get_stellar_account))
         .with_state(AppState {
             db_pool,
             redis_cache,

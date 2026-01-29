@@ -11,7 +11,7 @@ use crate::payments::types::{
 };
 use async_trait::async_trait;
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
@@ -42,15 +42,13 @@ impl Default for PaystackConfig {
 impl PaystackConfig {
     /// Create config from environment variables
     pub fn from_env() -> Result<Self, AppError> {
-        let secret_key = std::env::var("PAYSTACK_SECRET_KEY")
-            .map_err(|_| {
-                AppError::new(AppErrorKind::Infrastructure(
-                    crate::error::InfrastructureError::Configuration {
-                        message: "PAYSTACK_SECRET_KEY environment variable is required"
-                            .to_string(),
-                    },
-                ))
-            })?;
+        let secret_key = std::env::var("PAYSTACK_SECRET_KEY").map_err(|_| {
+            AppError::new(AppErrorKind::Infrastructure(
+                crate::error::InfrastructureError::Configuration {
+                    message: "PAYSTACK_SECRET_KEY environment variable is required".to_string(),
+                },
+            ))
+        })?;
 
         let base_url = std::env::var("PAYSTACK_BASE_URL")
             .unwrap_or_else(|_| "https://api.paystack.co".to_string());
@@ -111,7 +109,10 @@ impl PaystackProvider {
         let mut request = self
             .client
             .request(method, &url)
-            .header("Authorization", format!("Bearer {}", self.config.secret_key))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.secret_key),
+            )
             .header("Content-Type", "application/json");
 
         if let Some(body) = body {
@@ -134,28 +135,25 @@ impl PaystackProvider {
                                             return Ok(paystack_resp.data);
                                         } else {
                                             let error_msg = paystack_resp.message;
-                                            error!(
-                                                "Paystack API error: {}",
-                                                error_msg
-                                            );
-                                            return Err(AppError::new(
-                                                AppErrorKind::External(ExternalError::PaymentProvider {
+                                            error!("Paystack API error: {}", error_msg);
+                                            return Err(AppError::new(AppErrorKind::External(
+                                                ExternalError::PaymentProvider {
                                                     provider: "Paystack".to_string(),
                                                     message: error_msg,
                                                     is_retryable: false,
-                                                }),
-                                            ));
+                                                },
+                                            )));
                                         }
                                     }
                                     Err(e) => {
                                         error!("Failed to parse Paystack response: {}", e);
-                                        return Err(AppError::new(
-                                            AppErrorKind::External(ExternalError::PaymentProvider {
+                                        return Err(AppError::new(AppErrorKind::External(
+                                            ExternalError::PaymentProvider {
                                                 provider: "Paystack".to_string(),
                                                 message: format!("Invalid response format: {}", e),
                                                 is_retryable: false,
-                                            }),
-                                        ));
+                                            },
+                                        )));
                                     }
                                 }
                             } else if status == 429 {
@@ -176,7 +174,8 @@ impl PaystackProvider {
                                         retry_after: Some(60),
                                     },
                                 )));
-                            } else if status.is_server_error() && attempt < self.config.max_retries {
+                            } else if status.is_server_error() && attempt < self.config.max_retries
+                            {
                                 // Server error - retry
                                 let backoff = 2_u64.pow(attempt);
                                 warn!(
@@ -246,7 +245,10 @@ impl PaystackProvider {
 
 #[async_trait]
 impl PaymentProvider for PaystackProvider {
-    async fn initiate_payment(&self, request: PaymentRequest) -> crate::error::AppResult<PaymentResponse> {
+    async fn initiate_payment(
+        &self,
+        request: PaymentRequest,
+    ) -> crate::error::AppResult<PaymentResponse> {
         info!(
             "Initiating Paystack payment: {} {} {}",
             request.amount, request.currency, request.reference
@@ -277,7 +279,11 @@ impl PaymentProvider for PaystackProvider {
         }
 
         let response: PaystackInitializeResponse = self
-            .make_request(reqwest::Method::POST, "/transaction/initialize", Some(&payload))
+            .make_request(
+                reqwest::Method::POST,
+                "/transaction/initialize",
+                Some(&payload),
+            )
             .await?;
 
         info!(
@@ -287,7 +293,7 @@ impl PaymentProvider for PaystackProvider {
 
         Ok(PaymentResponse {
             authorization_url: Some(response.authorization_url),
-            access_code: Some(response.access_code),
+            access_code: Some(response.access_code.clone()),
             reference: response.reference,
             provider_data: Some(serde_json::json!({
                 "access_code": response.access_code,
@@ -514,7 +520,7 @@ mod tests {
     #[test]
     fn test_paystack_config_from_env_missing_key() {
         std::env::remove_var("PAYSTACK_SECRET_KEY");
-        
+
         let config = PaystackConfig::from_env();
         assert!(config.is_err(), "Config should fail without secret key");
     }
