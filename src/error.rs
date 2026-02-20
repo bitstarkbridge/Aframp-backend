@@ -37,6 +37,8 @@ pub enum ErrorCode {
     InvalidAmount,
     #[serde(rename = "DUPLICATE_TRANSACTION")]
     DuplicateTransaction,
+    #[serde(rename = "INSUFFICIENT_LIQUIDITY")]
+    InsufficientLiquidity,
 
     // Infrastructure errors (5xx)
     #[serde(rename = "DATABASE_ERROR")]
@@ -89,6 +91,8 @@ pub enum DomainError {
         wallet_address: String,
         reason: String,
     },
+    /// Insufficient cNGN liquidity for onramp
+    InsufficientLiquidity { amount: String },
 }
 
 /// Infrastructure-level errors (database, cache, configuration)
@@ -194,6 +198,7 @@ impl AppError {
                 DomainError::RateExpired { .. } => 410, // Gone
                 DomainError::DuplicateTransaction { .. } => 409, // Conflict
                 DomainError::TrustlineCreationFailed { .. } => 422,
+                DomainError::InsufficientLiquidity { .. } => 409, // Conflict
             },
             AppErrorKind::Infrastructure(err) => match err {
                 InfrastructureError::Database { .. } => 500,
@@ -228,6 +233,7 @@ impl AppError {
                 DomainError::RateExpired { .. } => ErrorCode::RateExpired,
                 DomainError::DuplicateTransaction { .. } => ErrorCode::DuplicateTransaction,
                 DomainError::TrustlineCreationFailed { .. } => ErrorCode::TrustlineCreationFailed,
+                DomainError::InsufficientLiquidity { .. } => ErrorCode::InsufficientLiquidity,
             },
             AppErrorKind::Infrastructure(err) => match err {
                 InfrastructureError::Database { .. } => ErrorCode::DatabaseError,
@@ -294,6 +300,9 @@ impl AppError {
                         &wallet_address[..6],
                         reason
                     )
+                }
+                DomainError::InsufficientLiquidity { .. } => {
+                    "Insufficient cNGN liquidity. Try a smaller amount or check back later.".to_string()
                 }
             },
             AppErrorKind::Infrastructure(_) => {

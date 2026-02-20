@@ -324,6 +324,47 @@ async fn main() -> anyhow::Result<()> {
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
     
+    // Setup onramp quote routes (requires db + cache; stellar optional for liquidity check)
+    let onramp_routes = if let (Some(pool), Some(cache)) = (db_pool.clone(), redis_cache.clone()) {
+        let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
+            .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
+            .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
+
+        let rate_repo = database::exchange_rate_repository::ExchangeRateRepository::new(pool.clone());
+        let fee_repo = database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
+        let fee_service = std::sync::Arc::new(services::fee_structure::FeeStructureService::new(
+            fee_repo,
+        ));
+
+        let exchange_rate_service = std::sync::Arc::new(
+            services::exchange_rate::ExchangeRateService::new(
+                rate_repo,
+                services::exchange_rate::ExchangeRateServiceConfig::default(),
+            )
+            .with_cache(cache)
+            .add_provider(std::sync::Arc::new(
+                services::rate_providers::FixedRateProvider::new(),
+            ))
+            .with_fee_service(fee_service.clone()),
+        );
+
+        let quote_repo = database::onramp_quote_repository::OnrampQuoteRepository::new(pool);
+
+        let quote_service = std::sync::Arc::new(services::onramp_quote::OnrampQuoteService::new(
+            exchange_rate_service,
+            fee_service,
+            quote_repo,
+            stellar_client.clone(),
+            cngn_issuer,
+        ));
+
+        Router::new()
+            .route("/api/onramp/quote", post(create_onramp_quote))
+            .with_state(quote_service)
+    } else {
+        Router::new()
+    };
+
     // Setup wallet routes with balance service
     let wallet_routes = if let (Some(client), Some(cache)) = (stellar_client.clone(), redis_cache.clone()) {
         let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
@@ -378,6 +419,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cngn/payments/sign", post(sign_cngn_payment))
         .route("/api/cngn/payments/submit", post(submit_cngn_payment))
         .route("/api/payments/initiate", post(initiate_payment))
+        .merge(onramp_routes)
         .merge(wallet_routes)
         .merge(webhook_routes)
         .with_state(AppState {
@@ -1044,6 +1086,28 @@ async fn list_trustline_operations_by_wallet(
                 request_id,
             )
         })
+}
+
+async fn create_onramp_quote(
+    axum::extract::State(quote_service): axum::extract::State<
+        std::sync::Arc<services::onramp_quote::OnrampQuoteService>,
+    >,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<services::onramp_quote::OnrampQuoteRequest>,
+) -> Result<
+    Json<services::onramp_quote::OnrampQuoteResponse>,
+    (
+        axum::http::StatusCode,
+        Json<crate::middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = crate::middleware::error::get_request_id_from_headers(&headers);
+
+    quote_service
+        .create_quote(payload)
+        .await
+        .map(Json)
+        .map_err(|e| app_error_response(e, request_id))
 }
 
 async fn calculate_fee(

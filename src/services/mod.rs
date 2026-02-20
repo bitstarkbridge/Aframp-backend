@@ -19,6 +19,8 @@ pub mod payment_orchestrator;
 pub mod exchange_rate;
 #[cfg(feature = "database")]
 pub mod rate_providers;
+#[cfg(feature = "database")]
+pub mod onramp_quote;
 pub mod webhook_processor;
 
 // Re-export blockchain traits for convenience
