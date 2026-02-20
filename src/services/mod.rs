@@ -1,5 +1,6 @@
 //! Services module for business logic and integrations
 
+pub mod balance;
 #[cfg(feature = "database")]
 pub mod cngn_trustline;
 #[cfg(feature = "database")]
@@ -9,6 +10,8 @@ pub mod conversion_audit;
 #[cfg(feature = "database")]
 pub mod fee_structure;
 #[cfg(feature = "database")]
+pub mod fee_calculation;
+#[cfg(feature = "database")]
 pub mod trustline_operation;
 #[cfg(feature = "database")]
 pub mod payment_orchestrator;
@@ -16,6 +19,7 @@ pub mod payment_orchestrator;
 pub mod exchange_rate;
 #[cfg(feature = "database")]
 pub mod rate_providers;
+pub mod webhook_processor;
 
 // Re-export blockchain traits for convenience
 #[cfg(feature = "database")]
