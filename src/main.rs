@@ -261,6 +261,66 @@ async fn main() -> anyhow::Result<()> {
         info!("Stellar transaction monitor worker disabled (TX_MONITOR_ENABLED=false)");
     }
 
+    // Initialize webhook processor and retry worker
+    let webhook_routes = if let Some(pool) = db_pool.clone() {
+        let webhook_repo = std::sync::Arc::new(database::webhook_repository::WebhookRepository::new(pool.clone()));
+        let provider_factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+            error!("Failed to initialize payment provider factory: {}", e);
+            panic!("Cannot start without payment providers");
+        }));
+        
+        // Create orchestrator for webhook processing
+        let transaction_repo = std::sync::Arc::new(database::transaction_repository::TransactionRepository::new(pool.clone()));
+        let orchestrator_config = services::payment_orchestrator::OrchestratorConfig::default();
+        
+        // Initialize providers for orchestrator
+        let mut providers = Vec::new();
+        for provider_name in provider_factory.list_available_providers() {
+            if let Ok(provider) = provider_factory.get_provider(provider_name) {
+                providers.push(std::sync::Arc::from(provider) as std::sync::Arc<dyn payments::provider::PaymentProvider>);
+            }
+        }
+        
+        let orchestrator = std::sync::Arc::new(services::payment_orchestrator::PaymentOrchestrator::new(
+            providers,
+            transaction_repo,
+            orchestrator_config,
+        ));
+        
+        let webhook_processor = std::sync::Arc::new(services::webhook_processor::WebhookProcessor::new(
+            webhook_repo,
+            provider_factory,
+            orchestrator,
+        ));
+        
+        // Start webhook retry worker
+        let webhook_retry_enabled = std::env::var("WEBHOOK_RETRY_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase() != "false";
+        
+        if webhook_retry_enabled {
+            let retry_worker = workers::webhook_retry::WebhookRetryWorker::new(
+                webhook_processor.clone(),
+                60, // Check every 60 seconds
+            );
+            tokio::spawn(async move {
+                retry_worker.run().await;
+            });
+            info!("✅ Webhook retry worker started");
+        }
+        
+        let webhook_state = api::webhooks::WebhookState {
+            processor: webhook_processor,
+        };
+        
+        Router::new()
+            .route("/webhooks/:provider", post(api::webhooks::handle_webhook))
+            .with_state(std::sync::Arc::new(webhook_state))
+    } else {
+        info!("⏭️  Skipping webhook routes (no database)");
+        Router::new()
+    };
+
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
     
@@ -319,6 +379,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cngn/payments/submit", post(submit_cngn_payment))
         .route("/api/payments/initiate", post(initiate_payment))
         .merge(wallet_routes)
+        .merge(webhook_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
