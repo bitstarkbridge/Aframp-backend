@@ -20,7 +20,7 @@ pub mod payment_orchestrator;
 #[cfg(feature = "database")]
 pub mod rate_providers;
 #[cfg(feature = "database")]
-pub mod trustline_operation;
+pub mod onramp_quote;
 pub mod webhook_processor;
 pub mod notification;
 
