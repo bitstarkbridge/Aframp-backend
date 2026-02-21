@@ -8,6 +8,7 @@ use crate::services::notification::{NotificationService, NotificationType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use sqlx::PgPool;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -406,20 +407,108 @@ impl OfframpProcessorWorker {
 
             let mut metadata = OfframpMetadata::from_json(&tx.metadata)?;
 
-            // Check if amount matches
-            // In a real scenario, we might want to check the actual Stellar transaction
-            // but for now we assume the monitor matched it correctly based on the memo.
-            // We do a final sanity check against the cngn_amount in DB.
+            // 1. Get incoming tx hash from metadata
+            let incoming_hash = metadata.stellar_tx_hash.as_deref().or_else(|| {
+                // fallback to checking the generic incoming_hash field set by monitor
+                tx.metadata.get("incoming_hash").and_then(|v| v.as_str())
+            });
 
-            // For now, we transition directly to processing_withdrawal
-            // In the future, we could add more rigorous verification here.
+            let hash = match incoming_hash {
+                Some(h) => h,
+                None => {
+                    error!(transaction_id = %tx_id, "no incoming hash found in metadata for cngn_received state");
+                    metadata.failure_reason = Some("Missing incoming hash".to_string());
+                    repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                    continue;
+                }
+            };
 
+            // 2. Fetch actual amount received on Stellar
+            let distribution_account = std::env::var("SYSTEM_WALLET_ADDRESS").unwrap_or_default();
+            let cngn_issuer = std::env::var("CNGN_ISSUER_TESTNET")
+                .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
+                .unwrap_or_default();
+
+            let operations = match self.stellar_client.get_transaction_operations(hash).await {
+                Ok(ops) => ops,
+                Err(e) => {
+                    warn!(transaction_id = %tx_id, error = %e, "failed to get transaction operations from stellar, retrying next cycle");
+                    continue;
+                }
+            };
+
+            let mut actual_amount_str = None;
+            for op in operations {
+                let op_type = op.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if op_type != "payment" { continue; }
+                
+                let destination = op.get("to").and_then(|v| v.as_str()).unwrap_or("");
+                let asset_code = op.get("asset_code").and_then(|v| v.as_str()).unwrap_or("");
+                let asset_issuer = op.get("asset_issuer").and_then(|v| v.as_str()).unwrap_or("");
+                
+                if destination == distribution_account && asset_code.eq_ignore_ascii_case("cngn") {
+                    if cngn_issuer.is_empty() || asset_issuer == cngn_issuer {
+                        actual_amount_str = op.get("amount").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        break;
+                    }
+                }
+            }
+
+            let actual_amount_str = match actual_amount_str {
+                Some(amt) => amt,
+                None => {
+                    error!(transaction_id = %tx_id, "could not find cNGN payment operation in transaction {}", hash);
+                    metadata.failure_reason = Some("No cNGN payment found in tx".to_string());
+                    repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                    continue;
+                }
+            };
+
+            // 3. Strict verification using BigDecimal (Zero tolerance)
+            use bigdecimal::BigDecimal;
+            use std::str::FromStr;
+
+            let expected_amount = match BigDecimal::from_str(&tx.from_amount.to_string()) {
+                Ok(amt) => amt,
+                Err(_) => {
+                    error!(transaction_id = %tx_id, "invalid expected amount format in DB");
+                    metadata.failure_reason = Some("Invalid expected amount format in DB".to_string());
+                    repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                    continue;
+                }
+            };
+
+            let actual_amount = match BigDecimal::from_str(&actual_amount_str) {
+                Ok(amt) => amt,
+                Err(_) => {
+                    error!(transaction_id = %tx_id, "invalid actual amount format from Stellar");
+                    metadata.failure_reason = Some("Invalid actual amount format from Stellar".to_string());
+                    repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                    continue;
+                }
+            };
+
+            if expected_amount != actual_amount {
+                error!(
+                    transaction_id = %tx_id, 
+                    expected = %expected_amount, 
+                    actual = %actual_amount, 
+                    "strict amount mismatch detected"
+                );
+                metadata.failure_reason = Some(format!("Amount mismatch. Expected {}, got {}", expected_amount, actual_amount));
+                
+                // Transition to refund
+                repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                self.notification_service.send_notification(&tx, NotificationType::OfframpFailed, "Received amount does not precisely match expected amount, initiating refund").await;
+                continue;
+            }
+
+            // Amounts matched perfectly, proceed to transfer
             let next_status = OfframpState::ProcessingWithdrawal;
-
             repo.update_status(&tx_id, next_status.as_str()).await?;
-            info!(transaction_id = %tx_id, "cNGN payment verified, moving to withdrawal initiation");
+            info!(transaction_id = %tx_id, "cNGN payment verified perfectly, moving to withdrawal initiation");
             
-            self.notification_service.send_notification(&tx, NotificationType::CngnReceived, "Stellar payment received and verified").await;
+            self.notification_service.send_notification(&tx, NotificationType::CngnReceived, "Stellar payment received and precisely verified, processing bank transfer").await;
         }
 
         Ok(())
@@ -461,66 +550,79 @@ impl OfframpProcessorWorker {
                 metadata: Some(tx.metadata.clone()),
             };
 
-            // Select provider (simple logic: try Flutterwave, then Paystack as fallback)
-            // In a better implementation, we might use the orchestrator's selection strategy.
-            let provider_names = vec![
-                crate::payments::types::ProviderName::Flutterwave,
-                crate::payments::types::ProviderName::Paystack,
-            ];
+            // Provide failover logic explicitly. Attempt 1-2 on Flutterwave, fallback to Paystack on 3
+            let attempt = metadata.retry_count + 1;
+            let max_retries = 3; 
+            
+            let provider_name = if attempt <= 2 {
+                crate::payments::types::ProviderName::Flutterwave
+            } else {
+                crate::payments::types::ProviderName::Paystack
+            };
 
-            let mut success = false;
-            let mut last_error = None;
+            info!(transaction_id = %tx_id, provider = %provider_name, attempt = attempt, "attempting withdrawal initiation");
 
-            for provider_name in provider_names {
-                info!(transaction_id = %tx_id, provider = %provider_name, "attempting withdrawal initiation");
+            let provider = match self.provider_factory.get_provider(provider_name.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(transaction_id = %tx_id, provider = %provider_name, error = %e, "failed to get provider from factory");
+                    // Force failure logic below if we can't even load a provider
+                    metadata.failure_reason = Some(format!("Provider {} not configured", provider_name));
+                    repo.update_status_with_metadata(&tx_id, OfframpState::RefundInitiated.as_str(), metadata.to_json()).await?;
+                    continue;
+                }
+            };
 
-                let provider = match self.provider_factory.get_provider(provider_name.clone()) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!(transaction_id = %tx_id, provider = %provider_name, error = %e, "failed to get provider from factory");
-                        continue;
-                    }
-                };
+            match provider.process_withdrawal(request.clone()).await {
+                Ok(response) => {
+                    info!(transaction_id = %tx_id, provider = %provider_name, reference = ?response.provider_reference, "withdrawal initiated successfully");
 
-                match provider.process_withdrawal(request.clone()).await {
-                    Ok(response) => {
-                        info!(transaction_id = %tx_id, provider = %provider_name, reference = ?response.provider_reference, "withdrawal initiated successfully");
+                    metadata.provider_name = Some(provider_name.to_string());
+                    metadata.provider_reference = response.provider_reference;
+                    metadata.provider_response = response.provider_data;
+                    metadata.retry_count = 0; // Reset active retries for the monitoring phase
 
-                        metadata.provider_name = Some(provider_name.to_string());
-                        metadata.provider_reference = response.provider_reference;
-                        metadata.provider_response = response.provider_data;
+                    repo.update_status_with_metadata(
+                        &tx_id,
+                        OfframpState::TransferPending.as_str(),
+                        metadata.to_json(),
+                    )
+                    .await?;
+                }
+                Err(e) => {
+                    warn!(transaction_id = %tx_id, provider = %provider_name, error = %e, "provider withdrawal initiation failed");
+                    
+                    let is_recoverable = match &e {
+                        crate::payments::error::PaymentError::Network(_) | crate::payments::error::PaymentError::Timeout => true,
+                        // Could expand with more specific error matching here
+                        _ => false,
+                    };
 
+                    if attempt >= max_retries || !is_recoverable {
+                        error!(transaction_id = %tx_id, "withdrawal initiation failed permanently");
+                        metadata.failure_reason = Some(e.to_string());
                         repo.update_status_with_metadata(
                             &tx_id,
-                            OfframpState::TransferPending.as_str(),
+                            OfframpState::RefundInitiated.as_str(),
                             metadata.to_json(),
                         )
                         .await?;
-                        success = true;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(transaction_id = %tx_id, provider = %provider_name, error = %e, "provider withdrawal initiation failed");
-                        last_error = Some(e);
-                        // Continue to next provider
+                        self.notification_service.send_notification(&tx, NotificationType::OfframpFailed, "Bank transfer initiation failed, initiating refund").await;
+                    } else {
+                        // Schedule retry
+                        metadata.retry_count = attempt;
+                        metadata.last_retry_at = Some(chrono::Utc::now().to_rfc3339());
+                        metadata.failure_reason = Some(e.to_string());
+                        
+                        repo.update_status_with_metadata(
+                            &tx_id,
+                            OfframpState::ProcessingWithdrawal.as_str(), // Keep in same state for next loop
+                            metadata.to_json(),
+                        )
+                        .await?;
+                        info!(transaction_id = %tx_id, attempt = attempt, "scheduled withdrawal initiation retry");
                     }
                 }
-            }
-
-            if !success {
-                error!(transaction_id = %tx_id, "all providers failed for withdrawal initiation");
-                let error_msg = last_error
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "All providers failed".to_string());
-
-                metadata.failure_reason = Some(error_msg.clone());
-                repo.update_status_with_metadata(
-                    &tx_id,
-                    OfframpState::RefundInitiated.as_str(),
-                    metadata.to_json(),
-                )
-                .await?;
-                self.notification_service.send_notification(&tx, NotificationType::OfframpFailed, "Bank transfer initiation failed, initiating refund").await;
             }
         }
 
@@ -544,6 +646,16 @@ impl OfframpProcessorWorker {
                 OfframpError::Internal(format!("missing provider name for transaction {}", tx_id))
             })?;
             let provider_name = crate::payments::types::ProviderName::from_str(provider_name_str)?;
+
+            // Respect exponential backoff delay if scheduled
+            if let Some(next_retry) = &metadata.next_retry_after {
+                if let Ok(next_dt) = chrono::DateTime::parse_from_rfc3339(next_retry) {
+                    if chrono::Utc::now() < next_dt.with_timezone(&chrono::Utc) {
+                        debug!(transaction_id = %tx_id, "skipping transfer monitoring, waiting for next retry window");
+                        continue;
+                    }
+                }
+            }
 
             let provider = self.provider_factory.get_provider(provider_name.clone())?;
 
@@ -599,7 +711,43 @@ impl OfframpProcessorWorker {
                 }
                 Err(e) => {
                     warn!(transaction_id = %tx_id, error = %e, "failed to poll provider status");
-                    // We'll retry in next cycle
+                    
+                    // Implement exponential backoff for polling
+                    let attempt = metadata.retry_count + 1;
+                    let max_retries = 3;
+                    
+                    if attempt > max_retries {
+                        error!(transaction_id = %tx_id, "max retries exceeded while polling provider status");
+                        metadata.failure_reason = Some(format!("Failed to poll provider status after {} attempts: {}", max_retries, e));
+                        repo.update_status_with_metadata(
+                            &tx_id,
+                            OfframpState::RefundInitiated.as_str(),
+                            metadata.to_json(),
+                        )
+                        .await?;
+                        self.notification_service.send_notification(&tx, NotificationType::OfframpFailed, "Bank transfer monitoring failed, initiating refund").await;
+                    } else {
+                        // Delay mapping: Attempt 1 = 30s, Attempt 2 = 120s (2m), Attempt 3 = 600s (10m)
+                        let delay_secs = match attempt {
+                            1 => 30,
+                            2 => 120,
+                            _ => 600,
+                        };
+                        
+                        metadata.retry_count = attempt;
+                        metadata.last_retry_at = Some(chrono::Utc::now().to_rfc3339());
+                        
+                        let next_retry = chrono::Utc::now() + chrono::Duration::seconds(delay_secs);
+                        metadata.next_retry_after = Some(next_retry.to_rfc3339());
+                        
+                        repo.update_status_with_metadata(
+                            &tx_id,
+                            OfframpState::TransferPending.as_str(), // Keep in pending, but metadata updated with next retry
+                            metadata.to_json(),
+                        )
+                        .await?;
+                        info!(transaction_id = %tx_id, attempt = attempt, next_retry = %next_retry, "scheduled transfer monitoring retry");
+                    }
                 }
             }
         }
@@ -625,7 +773,16 @@ impl OfframpProcessorWorker {
             let builder = CngnPaymentBuilder::new(self.stellar_client.clone());
 
             let amount_str = tx.cngn_amount.to_string();
-            let memo = CngnMemo::Text(format!("REF-{}", &tx_id[..24])); // Max 28 chars
+            // The user req is: `REFUND-{original_memo}`. Here the original memo used was either the tx_id or WD-{tx_id}.
+            // We ensure it fits the 28 char Stellar text memo limit.
+            let memo_str = format!("REFUND-{}", tx_id);
+            let memo_str = if memo_str.len() > 28 {
+                memo_str[..28].to_string()
+            } else {
+                memo_str
+            };
+            
+            let memo = CngnMemo::Text(memo_str);
 
             repo.update_status(&tx_id, OfframpState::Refunding.as_str())
                 .await?;
