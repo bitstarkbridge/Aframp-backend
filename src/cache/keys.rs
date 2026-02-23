@@ -294,6 +294,31 @@ pub mod bill_payment {
     }
 }
 
+pub mod onramp {
+    use super::*;
+
+    pub const NAMESPACE: &str = "onramp";
+
+    #[derive(Debug, Clone)]
+    pub struct QuoteKey {
+        pub quote_id: String,
+    }
+
+    impl QuoteKey {
+        pub fn new(quote_id: impl Into<String>) -> Self {
+            Self {
+                quote_id: quote_id.into(),
+            }
+        }
+    }
+
+    impl fmt::Display for QuoteKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}:{}:quote:{}", VERSION, NAMESPACE, self.quote_id)
+        }
+    }
+}
+
 pub mod fee {
     use super::*;
 
@@ -316,6 +341,17 @@ pub mod fee {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{}:{}:structure:{}", VERSION, NAMESPACE, self.fee_type)
         }
+    }
+
+    /// API fees cache keys per spec
+    pub const FEES_ALL: &str = "api:fees:all";
+
+    pub fn fees_calculated(tx_type: &str, provider: &str, amount: &str) -> String {
+        format!("api:fees:{}:{}:{}", tx_type, provider, amount)
+    }
+
+    pub fn fees_comparison(tx_type: &str, amount: &str) -> String {
+        format!("api:fees:{}:all:{}", tx_type, amount)
     }
 }
 
