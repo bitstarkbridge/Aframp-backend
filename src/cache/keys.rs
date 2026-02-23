@@ -317,6 +317,25 @@ pub mod onramp {
             write!(f, "{}:{}:quote:{}", VERSION, NAMESPACE, self.quote_id)
         }
     }
+
+    #[derive(Debug, Clone)]
+    pub struct StatusKey {
+        pub tx_id: String,
+    }
+
+    impl StatusKey {
+        pub fn new(tx_id: impl Into<String>) -> Self {
+            Self {
+                tx_id: tx_id.into(),
+            }
+        }
+    }
+
+    impl fmt::Display for StatusKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "api:{}:status:{}", NAMESPACE, self.tx_id)
+        }
+    }
 }
 
 pub mod fee {
