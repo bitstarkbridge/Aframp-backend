@@ -355,6 +355,31 @@ pub mod fee {
     }
 }
 
+pub mod quote {
+    use super::*;
+
+    pub const NAMESPACE: &str = "quote";
+
+    #[derive(Debug, Clone)]
+    pub struct QuoteKey {
+        pub quote_id: String,
+    }
+
+    impl QuoteKey {
+        pub fn new(quote_id: impl Into<String>) -> Self {
+            Self {
+                quote_id: quote_id.into(),
+            }
+        }
+    }
+
+    impl fmt::Display for QuoteKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}:{}:{}", VERSION, NAMESPACE, self.quote_id)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
