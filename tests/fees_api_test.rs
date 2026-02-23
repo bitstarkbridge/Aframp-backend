@@ -1,13 +1,13 @@
 //! Integration tests for GET /api/fees endpoint
 
-use Bitmesh_backend::api::fees::{get_fees, FeesState};
-use Bitmesh_backend::services::fee_calculation::FeeCalculationService;
 use axum::{body::Body, routing::get, Router};
 use http::{Request, StatusCode};
 use sqlx::PgPool;
 use std::str::FromStr;
 use std::sync::Arc;
 use tower::util::ServiceExt;
+use Bitmesh_backend::api::fees::{get_fees, FeesState};
+use Bitmesh_backend::services::fee_calculation::FeeCalculationService;
 
 async fn setup_test_db() -> PgPool {
     let database_url = std::env::var("DATABASE_URL")
@@ -140,10 +140,7 @@ async fn test_fees_amount_type_provider_returns_calculated() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json.get("amount").and_then(|v| v.as_f64()), Some(10000.0));
-    assert_eq!(
-        json.get("type").and_then(|v| v.as_str()),
-        Some("onramp")
-    );
+    assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("onramp"));
     assert_eq!(
         json.get("provider").and_then(|v| v.as_str()),
         Some("flutterwave")
@@ -158,7 +155,11 @@ async fn test_fees_amount_type_provider_returns_calculated() {
 
     // Provider fee: 10,000 × 1.4% + 100 = 240, Platform: 50, Total: 290
     let total = breakdown.get("total_fee_ngn").unwrap().as_f64().unwrap();
-    assert!((total - 290.0).abs() < 1.0, "expected total ~290, got {}", total);
+    assert!(
+        (total - 290.0).abs() < 1.0,
+        "expected total ~290, got {}",
+        total
+    );
 }
 
 #[tokio::test]
@@ -186,10 +187,7 @@ async fn test_fees_amount_type_no_provider_returns_comparison() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json.get("amount").and_then(|v| v.as_f64()), Some(10000.0));
-    assert_eq!(
-        json.get("type").and_then(|v| v.as_str()),
-        Some("onramp")
-    );
+    assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("onramp"));
     assert!(json.get("comparison").is_some());
     assert!(json.get("cheapest_provider").is_some());
 }
@@ -218,7 +216,10 @@ async fn test_fees_amount_without_type_returns_400_missing_type() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let error = json.get("error").unwrap();
-    assert_eq!(error.get("code").and_then(|v| v.as_str()), Some("MISSING_TYPE"));
+    assert_eq!(
+        error.get("code").and_then(|v| v.as_str()),
+        Some("MISSING_TYPE")
+    );
 }
 
 #[tokio::test]
@@ -245,7 +246,10 @@ async fn test_fees_invalid_type_returns_400() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let error = json.get("error").unwrap();
-    assert_eq!(error.get("code").and_then(|v| v.as_str()), Some("INVALID_TYPE"));
+    assert_eq!(
+        error.get("code").and_then(|v| v.as_str()),
+        Some("INVALID_TYPE")
+    );
 }
 
 #[tokio::test]

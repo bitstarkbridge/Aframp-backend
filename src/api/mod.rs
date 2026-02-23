@@ -1,4 +1,4 @@
-pub mod fees;
 pub mod bills;
+pub mod fees;
 pub mod wallet;
 pub mod webhooks;

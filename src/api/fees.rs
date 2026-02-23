@@ -175,8 +175,11 @@ fn validate_params(params: &FeesQueryParams) -> Result<(), Response> {
             Json(FeesErrorResponse {
                 error: FeesErrorDetail {
                     code: "MISSING_TYPE".to_string(),
-                    message: "Query param 'type' is required when 'amount' is provided.".to_string(),
-                    supported_types: Some(SUPPORTED_TYPES.iter().map(|s| (*s).to_string()).collect()),
+                    message: "Query param 'type' is required when 'amount' is provided."
+                        .to_string(),
+                    supported_types: Some(
+                        SUPPORTED_TYPES.iter().map(|s| (*s).to_string()).collect(),
+                    ),
                     supported_providers: None,
                     retry_after: None,
                 },
@@ -193,7 +196,9 @@ fn validate_params(params: &FeesQueryParams) -> Result<(), Response> {
                     error: FeesErrorDetail {
                         code: "INVALID_TYPE".to_string(),
                         message: format!("Transaction type '{}' is not supported.", ty),
-                        supported_types: Some(SUPPORTED_TYPES.iter().map(|s| (*s).to_string()).collect()),
+                        supported_types: Some(
+                            SUPPORTED_TYPES.iter().map(|s| (*s).to_string()).collect(),
+                        ),
                         supported_providers: None,
                         retry_after: None,
                     },
@@ -212,7 +217,12 @@ fn validate_params(params: &FeesQueryParams) -> Result<(), Response> {
                         code: "INVALID_PROVIDER".to_string(),
                         message: format!("Provider '{}' is not supported.", pr),
                         supported_types: None,
-                        supported_providers: Some(SUPPORTED_PROVIDERS.iter().map(|s| (*s).to_string()).collect()),
+                        supported_providers: Some(
+                            SUPPORTED_PROVIDERS
+                                .iter()
+                                .map(|s| (*s).to_string())
+                                .collect(),
+                        ),
                         retry_after: None,
                     },
                 }),
@@ -272,7 +282,9 @@ fn bd_to_f64(b: &BigDecimal) -> f64 {
 }
 
 async fn build_full_structure(state: &FeesState) -> Result<FeesResponse, FeesError> {
-    let structure = load_full_structure(state).await.map_err(FeesError::Database)?;
+    let structure = load_full_structure(state)
+        .await
+        .map_err(FeesError::Database)?;
     Ok(FeesResponse::Full(FullFeeStructureResponse {
         fee_structure: structure,
         timestamp: chrono::Utc::now().to_rfc3339(),
@@ -286,15 +298,26 @@ async fn load_full_structure(state: &FeesState) -> Result<serde_json::Value, Dat
         let mut providers_obj = serde_json::Map::new();
 
         for pr in &SUPPORTED_PROVIDERS {
-            let breakdown = state.fee_service.calculate_fees(
-                ty,
-                BigDecimal::from_str("10000").unwrap(),
-                Some(pr),
-                Some("card"),
-            ).await?;
+            let breakdown = state
+                .fee_service
+                .calculate_fees(
+                    ty,
+                    BigDecimal::from_str("10000").unwrap(),
+                    Some(pr),
+                    Some("card"),
+                )
+                .await?;
 
-            let fee_pct = breakdown.provider.as_ref().map(|p| bd_to_f64(&p.percent)).unwrap_or(0.0);
-            let flat = breakdown.provider.as_ref().map(|p| bd_to_f64(&p.flat)).unwrap_or(0.0);
+            let fee_pct = breakdown
+                .provider
+                .as_ref()
+                .map(|p| bd_to_f64(&p.percent))
+                .unwrap_or(0.0);
+            let flat = breakdown
+                .provider
+                .as_ref()
+                .map(|p| bd_to_f64(&p.flat))
+                .unwrap_or(0.0);
 
             providers_obj.insert(
                 pr.to_string(),
@@ -305,17 +328,26 @@ async fn load_full_structure(state: &FeesState) -> Result<serde_json::Value, Dat
             );
         }
 
-        let sample = state.fee_service.calculate_fees(
-            ty,
-            BigDecimal::from_str("10000").unwrap(),
-            Some("flutterwave"),
-            Some("card"),
-        ).await?;
+        let sample = state
+            .fee_service
+            .calculate_fees(
+                ty,
+                BigDecimal::from_str("10000").unwrap(),
+                Some("flutterwave"),
+                Some("card"),
+            )
+            .await?;
 
-        type_obj.insert("platform_fee_pct".to_string(), serde_json::json!(bd_to_f64(&sample.platform.percent)));
+        type_obj.insert(
+            "platform_fee_pct".to_string(),
+            serde_json::json!(bd_to_f64(&sample.platform.percent)),
+        );
         type_obj.insert("min_fee_ngn".to_string(), serde_json::json!(50));
         type_obj.insert("max_fee_ngn".to_string(), serde_json::json!(10000));
-        type_obj.insert("providers".to_string(), serde_json::Value::Object(providers_obj));
+        type_obj.insert(
+            "providers".to_string(),
+            serde_json::Value::Object(providers_obj),
+        );
         result.insert((*ty).to_string(), serde_json::Value::Object(type_obj));
     }
 
@@ -436,7 +468,8 @@ fn error_response(err: FeesError) -> Response {
                 Json(FeesErrorResponse {
                     error: FeesErrorDetail {
                         code: "FEE_SERVICE_UNAVAILABLE".to_string(),
-                        message: "Fee service is temporarily unavailable. Please try again.".to_string(),
+                        message: "Fee service is temporarily unavailable. Please try again."
+                            .to_string(),
                         supported_types: None,
                         supported_providers: None,
                         retry_after: Some(30),
