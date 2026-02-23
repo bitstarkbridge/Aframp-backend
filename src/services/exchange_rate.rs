@@ -481,8 +481,8 @@ mod tests {
         assert_ne!(ConversionDirection::Buy, ConversionDirection::Sell);
     }
 
-    #[test]
-    fn test_rate_validation() {
+    #[tokio::test]
+    async fn test_rate_validation() {
         let config = ExchangeRateServiceConfig::default();
         let repo = ExchangeRateRepository::new(
             sqlx::PgPool::connect_lazy("postgresql://localhost/test").unwrap(),
