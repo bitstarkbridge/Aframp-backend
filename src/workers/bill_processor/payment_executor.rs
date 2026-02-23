@@ -1,7 +1,7 @@
-use super::types::{BillPaymentRequest, BillPaymentResponse, ProcessingError};
 use super::providers::BillPaymentProvider;
-use tracing::{debug, error, info, warn};
+use super::types::{BillPaymentRequest, BillPaymentResponse, ProcessingError};
 use std::time::Duration;
+use tracing::{debug, error, info, warn};
 
 /// Handles payment execution through bill payment providers
 pub struct PaymentExecutor;
@@ -67,17 +67,12 @@ impl PaymentExecutor {
                             attempts = attempt,
                             "Payment execution failed after max retries"
                         );
-                        return Err(ProcessingError::RetryLimitExceeded {
-                            attempts: attempt,
-                        });
+                        return Err(ProcessingError::RetryLimitExceeded { attempts: attempt });
                     }
 
                     // Determine backoff time
                     let backoff_idx = (attempt - 1) as usize;
-                    let wait_seconds = backoff_seconds
-                        .get(backoff_idx)
-                        .copied()
-                        .unwrap_or(300); // Default to 5 minutes
+                    let wait_seconds = backoff_seconds.get(backoff_idx).copied().unwrap_or(300); // Default to 5 minutes
 
                     warn!(
                         transaction_id = request.transaction_id,

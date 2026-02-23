@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
 // Error Types
@@ -11,31 +11,31 @@ use chrono::{DateTime, Utc};
 pub enum ProcessingError {
     #[error("account verification failed: {reason}")]
     AccountVerificationFailed { reason: String },
-    
+
     #[error("payment processing failed: {reason}")]
     PaymentProcessingFailed { reason: String },
-    
+
     #[error("provider error: {provider} - {reason}")]
     ProviderError { provider: String, reason: String },
-    
+
     #[error("amount mismatch: expected {expected}, got {actual}")]
     AmountMismatch { expected: String, actual: String },
-    
+
     #[error("retry limit exceeded: {attempts} attempts made")]
     RetryLimitExceeded { attempts: u32 },
-    
+
     #[error("refund failed: {reason}")]
     RefundFailed { reason: String },
-    
+
     #[error("database error: {0}")]
     Database(String),
-    
+
     #[error("stellar error: {0}")]
     Stellar(String),
-    
+
     #[error("timeout: {0}")]
     Timeout(String),
-    
+
     #[error("invalid state: {0}")]
     InvalidState(String),
 }
@@ -47,11 +47,11 @@ pub enum ProcessingError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BillPaymentRequest {
     pub transaction_id: String,
-    pub provider_code: String, // "ekedc", "mtn", "dstv-compact", etc.
+    pub provider_code: String,  // "ekedc", "mtn", "dstv-compact", etc.
     pub account_number: String, // Meter, phone, smart card, etc.
-    pub account_type: String, // "prepaid", "postpaid", etc.
-    pub bill_type: String, // "electricity", "airtime", "data", "cable_tv"
-    pub amount: i64, // Amount in smallest unit (kobo, cents)
+    pub account_type: String,   // "prepaid", "postpaid", etc.
+    pub bill_type: String,      // "electricity", "airtime", "data", "cable_tv"
+    pub amount: i64,            // Amount in smallest unit (kobo, cents)
     pub phone_number: Option<String>,
     pub variation_code: Option<String>, // For data bundles, cable packages
 }
@@ -82,7 +82,7 @@ pub struct AccountInfo {
     pub account_number: String,
     pub customer_name: String,
     pub account_type: String, // "prepaid", "postpaid"
-    pub status: String, // "active", "inactive", "suspended"
+    pub status: String,       // "active", "inactive", "suspended"
     pub outstanding_balance: Option<f64>,
     pub additional_info: String, // JSON string for flexibility
 }

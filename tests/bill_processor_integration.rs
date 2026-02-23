@@ -2,12 +2,12 @@
 
 #[cfg(test)]
 mod tests {
-    use Bitmesh_backend::workers::bill_processor::types::{
-        BillPaymentRequest, BillPaymentResponse, ProcessingError, BillProcessingState,
-    };
     use Bitmesh_backend::workers::bill_processor::account_verification::AccountVerifier;
-    use Bitmesh_backend::workers::bill_processor::token_manager::TokenManager;
     use Bitmesh_backend::workers::bill_processor::refund_handler::RefundHandler;
+    use Bitmesh_backend::workers::bill_processor::token_manager::TokenManager;
+    use Bitmesh_backend::workers::bill_processor::types::{
+        BillPaymentRequest, BillPaymentResponse, BillProcessingState, ProcessingError,
+    };
 
     // -----------------------------------------------------------------------
     // Account Verification Tests
@@ -20,7 +20,7 @@ mod tests {
         assert!(AccountVerifier::is_valid_nigerian_phone("09012345678"));
         assert!(AccountVerifier::is_valid_nigerian_phone("07012345678"));
         assert!(AccountVerifier::is_valid_nigerian_phone("2348012345678"));
-        
+
         // Invalid numbers
         assert!(!AccountVerifier::is_valid_nigerian_phone("12345678"));
         assert!(!AccountVerifier::is_valid_nigerian_phone("abc12345678"));
@@ -34,7 +34,7 @@ mod tests {
         assert_eq!(AccountVerifier::detect_network("07012345678"), "Airtel");
         assert_eq!(AccountVerifier::detect_network("07612345678"), "Glo");
         assert_eq!(AccountVerifier::detect_network("08912345678"), "9Mobile");
-        
+
         // With country code
         assert_eq!(AccountVerifier::detect_network("2348012345678"), "MTN");
         assert_eq!(AccountVerifier::detect_network("+2348012345678"), "MTN");
@@ -50,7 +50,7 @@ mod tests {
 
         assert!(valid_meter.len() >= 10 && valid_meter.len() <= 12);
         assert!(valid_meter.chars().all(char::is_numeric));
-        
+
         assert!(invalid_meter_short.len() < 10);
         assert!(!invalid_meter_alpha.chars().all(char::is_numeric));
     }
@@ -63,11 +63,14 @@ mod tests {
     fn test_electricity_token_formatting() {
         let token = "12345678901234567890";
         let formatted = TokenManager::format_token(token, "electricity");
-        
+
         // Should contain dashes
         assert!(formatted.contains("-"));
         // Should preserve all digits
-        let digits: String = formatted.chars().filter(|c: &char| c.is_numeric()).collect();
+        let digits: String = formatted
+            .chars()
+            .filter(|c: &char| c.is_numeric())
+            .collect();
         assert_eq!(digits, token);
     }
 
@@ -76,29 +79,27 @@ mod tests {
         // Valid tokens
         assert!(TokenManager::validate_token("1234-5678-9012-3456", "electricity").0);
         assert!(TokenManager::validate_token("12345678901234567890", "electricity").0);
-        
+
         // Invalid tokens
         assert!(!TokenManager::validate_token("123", "electricity").0); // Too short
-        assert!(!TokenManager::validate_token("abcd-efgh-ijkl-mnop", "electricity").0); // Non-numeric
+        assert!(!TokenManager::validate_token("abcd-efgh-ijkl-mnop", "electricity").0);
+        // Non-numeric
     }
 
     #[test]
     fn test_cable_token_formatting() {
         let token = "1234567890";
         let formatted = TokenManager::format_token(token, "cable_tv");
-        
+
         // Should mask the middle
         assert!(!formatted.contains(&token[4..6])); // Middle should be masked
     }
 
     #[test]
     fn test_notification_formatting() {
-        let msg = TokenManager::format_for_notification(
-            Some("1234-5678-9012-3456"),
-            "electricity",
-        );
+        let msg = TokenManager::format_for_notification(Some("1234-5678-9012-3456"), "electricity");
         assert!(msg.contains("meter"));
-        
+
         let msg = TokenManager::format_for_notification(None, "electricity");
         assert!(msg.contains("not yet available"));
     }
@@ -117,21 +118,31 @@ mod tests {
     #[test]
     fn test_refund_eligibility_account_invalid() {
         let (eligible, reason) = RefundHandler::is_eligible_for_refund(0, 3, false, true);
-        assert!(eligible, "Should be eligible for refund when account invalid");
+        assert!(
+            eligible,
+            "Should be eligible for refund when account invalid"
+        );
         assert_eq!(reason, "Account verification failed");
     }
 
     #[test]
     fn test_refund_eligibility_max_retries() {
-        let (eligible, reason): (bool, String) = RefundHandler::is_eligible_for_refund(3, 3, true, true);
-        assert!(eligible, "Should be eligible for refund when max retries reached");
+        let (eligible, reason): (bool, String) =
+            RefundHandler::is_eligible_for_refund(3, 3, true, true);
+        assert!(
+            eligible,
+            "Should be eligible for refund when max retries reached"
+        );
         assert!(reason.contains("Max retry"));
     }
 
     #[test]
     fn test_refund_not_eligible() {
         let (eligible, _) = RefundHandler::is_eligible_for_refund(1, 3, true, true);
-        assert!(!eligible, "Should not be eligible with valid account and retries remaining");
+        assert!(
+            !eligible,
+            "Should not be eligible with valid account and retries remaining"
+        );
     }
 
     #[test]
@@ -140,10 +151,10 @@ mod tests {
             RefundHandler::format_refund_reason("amount_mismatch", Some("expected 5000, got 4500"));
         assert!(reason.contains("5000"));
         assert!(reason.contains("4500"));
-        
+
         let reason = RefundHandler::format_refund_reason("account_invalid", None);
         assert!(reason.contains("verification"));
-        
+
         let reason = RefundHandler::format_refund_reason("max_retries", None);
         assert!(reason.contains("retry"));
     }
@@ -155,11 +166,14 @@ mod tests {
     #[test]
     fn test_bill_processing_state_transitions() {
         // Test state string conversions
-        assert_eq!(BillProcessingState::PendingPayment.as_str(), "pending_payment");
+        assert_eq!(
+            BillProcessingState::PendingPayment.as_str(),
+            "pending_payment"
+        );
         assert_eq!(BillProcessingState::CngnReceived.as_str(), "cngn_received");
         assert_eq!(BillProcessingState::Completed.as_str(), "completed");
         assert_eq!(BillProcessingState::Refunded.as_str(), "refunded");
-        
+
         // Test from_str conversions
         assert_eq!(
             BillProcessingState::from_str("pending_payment"),
@@ -178,7 +192,9 @@ mod tests {
 
     #[test]
     fn test_provider_selection() {
-        use Bitmesh_backend::workers::bill_processor::{providers::get_primary_provider, providers::get_backup_providers};
+        use Bitmesh_backend::workers::bill_processor::{
+            providers::get_backup_providers, providers::get_primary_provider,
+        };
 
         // Primary provider selection
         assert_eq!(get_primary_provider("electricity"), "flutterwave");
@@ -191,7 +207,7 @@ mod tests {
         let backups = get_backup_providers("electricity");
         assert!(backups.contains(&"vtpass"));
         assert!(backups.contains(&"paystack"));
-        
+
         let backups = get_backup_providers("airtime");
         assert!(backups.contains(&"flutterwave"));
         assert!(backups.contains(&"paystack"));
@@ -259,7 +275,7 @@ mod tests {
     #[test]
     fn test_successful_payment_flow() {
         // Scenario: User pays for electricity successfully
-        
+
         // 1. Request created
         let request = BillPaymentRequest {
             transaction_id: "tx-electricity-001".to_string(),
@@ -305,7 +321,10 @@ mod tests {
         // 2. Check refund eligibility
         let (eligible, reason) =
             RefundHandler::is_eligible_for_refund(0, 3, true, !amount_mismatch);
-        assert!(eligible && amount_mismatch, "Should be eligible when amount mismatches");
+        assert!(
+            eligible && amount_mismatch,
+            "Should be eligible when amount mismatches"
+        );
         assert_eq!(reason, "Amount mismatch detected");
 
         // 3. Format refund reason

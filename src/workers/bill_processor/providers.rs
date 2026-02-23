@@ -27,10 +27,7 @@ pub trait BillPaymentProvider: Send + Sync {
     ) -> Result<BillPaymentResponse, ProcessingError>;
 
     /// Query payment status
-    async fn query_status(
-        &self,
-        reference: &str,
-    ) -> Result<PaymentStatus, ProcessingError>;
+    async fn query_status(&self, reference: &str) -> Result<PaymentStatus, ProcessingError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +88,11 @@ impl BillPaymentProvider for FlutterwaveAdapter {
     ) -> Result<AccountInfo, ProcessingError> {
         let url = format!("{}/v3/bills/{}/validate", self.base_url, provider_code);
 
-        debug!(provider = "flutterwave", account = account, "Verifying account");
+        debug!(
+            provider = "flutterwave",
+            account = account,
+            "Verifying account"
+        );
 
         // Build query string manually to avoid depending on `RequestBuilder::query` resolution
         let url_with_query = format!("{}?customer={}&type={}", url, account, account_type);
@@ -110,20 +111,18 @@ impl BillPaymentProvider for FlutterwaveAdapter {
         if !response.status().is_success() {
             return Err(ProcessingError::ProviderError {
                 provider: "flutterwave".to_string(),
-                reason: format!(
-                    "verification failed with status: {}",
-                    response.status()
-                ),
+                reason: format!("verification failed with status: {}", response.status()),
             });
         }
 
-        let data = response
-            .json::<JsonValue>()
-            .await
-            .map_err(|e| ProcessingError::ProviderError {
-                provider: "flutterwave".to_string(),
-                reason: format!("failed to parse response: {}", e),
-            })?;
+        let data =
+            response
+                .json::<JsonValue>()
+                .await
+                .map_err(|e| ProcessingError::ProviderError {
+                    provider: "flutterwave".to_string(),
+                    reason: format!("failed to parse response: {}", e),
+                })?;
 
         // Extract verification response data
         Ok(AccountInfo {
@@ -189,13 +188,14 @@ impl BillPaymentProvider for FlutterwaveAdapter {
             });
         }
 
-        let data = response
-            .json::<JsonValue>()
-            .await
-            .map_err(|e| ProcessingError::ProviderError {
-                provider: "flutterwave".to_string(),
-                reason: format!("failed to parse response: {}", e),
-            })?;
+        let data =
+            response
+                .json::<JsonValue>()
+                .await
+                .map_err(|e| ProcessingError::ProviderError {
+                    provider: "flutterwave".to_string(),
+                    reason: format!("failed to parse response: {}", e),
+                })?;
 
         Ok(BillPaymentResponse {
             provider_reference: data
@@ -217,10 +217,7 @@ impl BillPaymentProvider for FlutterwaveAdapter {
         })
     }
 
-    async fn query_status(
-        &self,
-        reference: &str,
-    ) -> Result<PaymentStatus, ProcessingError> {
+    async fn query_status(&self, reference: &str) -> Result<PaymentStatus, ProcessingError> {
         // Implementation would query Flutterwave for status
         // For now, return a placeholder
         Ok(PaymentStatus {
@@ -245,7 +242,11 @@ pub struct VTPassAdapter {
 }
 
 impl VTPassAdapter {
-    pub fn new(api_key: String, secret_key: String, base_url: String) -> Result<Self, ProcessingError> {
+    pub fn new(
+        api_key: String,
+        secret_key: String,
+        base_url: String,
+    ) -> Result<Self, ProcessingError> {
         Ok(Self {
             client: Client::new(),
             api_key,
@@ -341,13 +342,14 @@ impl BillPaymentProvider for VTPassAdapter {
             });
         }
 
-        let data = response
-            .json::<JsonValue>()
-            .await
-            .map_err(|e| ProcessingError::ProviderError {
-                provider: "vtpass".to_string(),
-                reason: format!("failed to parse response: {}", e),
-            })?;
+        let data =
+            response
+                .json::<JsonValue>()
+                .await
+                .map_err(|e| ProcessingError::ProviderError {
+                    provider: "vtpass".to_string(),
+                    reason: format!("failed to parse response: {}", e),
+                })?;
 
         Ok(BillPaymentResponse {
             provider_reference: data
@@ -376,10 +378,7 @@ impl BillPaymentProvider for VTPassAdapter {
         })
     }
 
-    async fn query_status(
-        &self,
-        reference: &str,
-    ) -> Result<PaymentStatus, ProcessingError> {
+    async fn query_status(&self, reference: &str) -> Result<PaymentStatus, ProcessingError> {
         // Implementation would query VTPass for status
         Ok(PaymentStatus {
             provider_reference: reference.to_string(),
@@ -477,13 +476,14 @@ impl BillPaymentProvider for PaystackAdapter {
             });
         }
 
-        let data = response
-            .json::<JsonValue>()
-            .await
-            .map_err(|e| ProcessingError::ProviderError {
-                provider: "paystack".to_string(),
-                reason: format!("failed to parse response: {}", e),
-            })?;
+        let data =
+            response
+                .json::<JsonValue>()
+                .await
+                .map_err(|e| ProcessingError::ProviderError {
+                    provider: "paystack".to_string(),
+                    reason: format!("failed to parse response: {}", e),
+                })?;
 
         Ok(BillPaymentResponse {
             provider_reference: data
@@ -501,10 +501,7 @@ impl BillPaymentProvider for PaystackAdapter {
         })
     }
 
-    async fn query_status(
-        &self,
-        reference: &str,
-    ) -> Result<PaymentStatus, ProcessingError> {
+    async fn query_status(&self, reference: &str) -> Result<PaymentStatus, ProcessingError> {
         // Implementation would query Paystack for status
         Ok(PaymentStatus {
             provider_reference: reference.to_string(),

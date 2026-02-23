@@ -3,20 +3,19 @@
 //! Requires: DATABASE_URL, REDIS_URL
 //! Run with: cargo test onramp_quote -- --ignored
 
+use std::sync::Arc;
 use Bitmesh_backend::cache::{init_cache_pool, CacheConfig, RedisCache};
+use Bitmesh_backend::chains::stellar::{client::StellarClient, config::StellarConfig};
 use Bitmesh_backend::database::{
     exchange_rate_repository::ExchangeRateRepository,
-    fee_structure_repository::FeeStructureRepository,
-    init_pool,
+    fee_structure_repository::FeeStructureRepository, init_pool,
 };
-use Bitmesh_backend::chains::stellar::{client::StellarClient, config::StellarConfig};
 use Bitmesh_backend::services::onramp_quote::{OnrampQuoteRequest, OnrampQuoteService};
 use Bitmesh_backend::services::{
     exchange_rate::{ExchangeRateService, ExchangeRateServiceConfig},
     fee_structure::FeeStructureService,
     rate_providers::FixedRateProvider,
 };
-use std::sync::Arc;
 
 async fn setup_service() -> OnrampQuoteService {
     let database_url = std::env::var("DATABASE_URL")
@@ -43,8 +42,7 @@ async fn setup_service() -> OnrampQuoteService {
             .with_fee_service(fee_service.clone()),
     );
 
-    let stellar_client =
-        StellarClient::new(StellarConfig::default()).expect("Stellar client init");
+    let stellar_client = StellarClient::new(StellarConfig::default()).expect("Stellar client init");
 
     OnrampQuoteService::new(
         exchange_rate_service,
@@ -63,8 +61,7 @@ async fn test_onramp_quote_success() {
     let result = service
         .create_quote(OnrampQuoteRequest {
             amount_ngn: 50000,
-            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                .to_string(),
+            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             provider: "flutterwave".to_string(),
             chain: Some("stellar".to_string()),
         })
@@ -89,8 +86,7 @@ async fn test_onramp_quote_rejects_zero_amount() {
     let result = service
         .create_quote(OnrampQuoteRequest {
             amount_ngn: 0,
-            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
-                .to_string(),
+            wallet_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
             provider: "flutterwave".to_string(),
             chain: Some("stellar".to_string()),
         })

@@ -44,7 +44,7 @@ impl TokenManager {
     fn format_cable_token(token: &str) -> String {
         // Mask smart card for security
         if token.len() > 4 {
-            format!("{}...{}", &token[..4], &token[token.len()-4..])
+            format!("{}...{}", &token[..4], &token[token.len() - 4..])
         } else {
             token.to_string()
         }
@@ -56,10 +56,7 @@ impl TokenManager {
             "electricity" => Self::validate_electricity_token(token),
             "airtime" | "data" => (true, "No token validation for airtime/data".to_string()),
             "cable_tv" => Self::validate_cable_token(token),
-            _ => (
-                true,
-                "Unknown bill type for token validation".to_string(),
-            ),
+            _ => (true, "Unknown bill type for token validation".to_string()),
         }
     }
 
@@ -81,7 +78,10 @@ impl TokenManager {
         }
 
         if !clean_token.chars().all(char::is_numeric) {
-            return (false, "Electricity token must contain only digits".to_string());
+            return (
+                false,
+                "Electricity token must contain only digits".to_string(),
+            );
         }
 
         (true, "Valid electricity token".to_string())
@@ -209,10 +209,10 @@ mod tests {
     fn test_format_for_notification() {
         let msg = TokenManager::format_for_notification(Some("1234-5678-9012-3456"), "electricity");
         assert!(msg.contains("meter"));
-        
+
         let msg = TokenManager::format_for_notification(Some("123"), "airtime");
         assert!(msg.contains("delivered"));
-        
+
         let msg = TokenManager::format_for_notification(None, "electricity");
         assert!(msg.contains("not yet available"));
     }

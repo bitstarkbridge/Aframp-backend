@@ -5,14 +5,14 @@
 
 use crate::cache::cache::Cache;
 use crate::cache::keys::onramp::QuoteKey;
+use crate::cache::RedisCache;
+use crate::chains::stellar::client::StellarClient;
 use crate::chains::stellar::trustline::CngnTrustlineManager;
 use crate::chains::stellar::types::{extract_cngn_balance, is_valid_stellar_address};
 use crate::error::{AppError, AppErrorKind, DomainError, ValidationError};
 use crate::services::exchange_rate::{ConversionDirection, ConversionRequest, ExchangeRateService};
 use crate::services::fee_structure::{FeeCalculationInput, FeeStructureService};
 use bigdecimal::{BigDecimal, Zero};
-use crate::cache::RedisCache;
-use crate::chains::stellar::client::StellarClient;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -245,10 +245,12 @@ impl OnrampQuoteService {
             })
             .await
             .map_err(|e| {
-                AppError::new(AppErrorKind::External(crate::error::ExternalError::Blockchain {
-                    message: e.to_string(),
-                    is_retryable: true,
-                }))
+                AppError::new(AppErrorKind::External(
+                    crate::error::ExternalError::Blockchain {
+                        message: e.to_string(),
+                        is_retryable: true,
+                    },
+                ))
             })?;
 
         // Parse fees from conversion result
@@ -257,13 +259,12 @@ impl OnrampQuoteService {
         let provider_fee_ngn = BigDecimal::from_str(&conversion.fees.provider_fee)
             .unwrap_or_else(|_| BigDecimal::from(0));
         // If fee service returned zeros, try onramp-specific fee types
-        let (platform_fee_ngn, provider_fee_ngn) = if platform_fee_ngn.is_zero()
-            && provider_fee_ngn.is_zero()
-        {
-            self.calculate_onramp_fees(&amount_bd).await?
-        } else {
-            (platform_fee_ngn, provider_fee_ngn)
-        };
+        let (platform_fee_ngn, provider_fee_ngn) =
+            if platform_fee_ngn.is_zero() && provider_fee_ngn.is_zero() {
+                self.calculate_onramp_fees(&amount_bd).await?
+            } else {
+                (platform_fee_ngn, provider_fee_ngn)
+            };
 
         let total_fee_ngn = &platform_fee_ngn + &provider_fee_ngn;
         let amount_ngn_after_fees = &amount_bd - &total_fee_ngn;
@@ -281,7 +282,8 @@ impl OnrampQuoteService {
             .ok()
             .filter(|v| v > &BigDecimal::from(0))
             .unwrap_or_else(|| amount_ngn_after_fees.clone());
-        let rate = BigDecimal::from_str(&conversion.base_rate).unwrap_or_else(|_| BigDecimal::from(1));
+        let rate =
+            BigDecimal::from_str(&conversion.base_rate).unwrap_or_else(|_| BigDecimal::from(1));
 
         // 4. Check cNGN liquidity
         if self.liquidity_check_enabled {
@@ -290,17 +292,21 @@ impl OnrampQuoteService {
 
         // 5. Check trustline
         let trustline_manager = CngnTrustlineManager::new(self.stellar_client.clone());
-        let trustline_status = trustline_manager.check_trustline(wallet_address).await.map_err(
-            |e| match e {
+        let trustline_status = trustline_manager
+            .check_trustline(wallet_address)
+            .await
+            .map_err(|e| match e {
                 crate::chains::stellar::errors::StellarError::InvalidAddress { .. } => {
-                    AppError::new(AppErrorKind::Validation(ValidationError::InvalidWalletAddress {
-                        address: wallet_address.to_string(),
-                        reason: "Stellar wallet address is invalid or does not exist".to_string(),
-                    }))
+                    AppError::new(AppErrorKind::Validation(
+                        ValidationError::InvalidWalletAddress {
+                            address: wallet_address.to_string(),
+                            reason: "Stellar wallet address is invalid or does not exist"
+                                .to_string(),
+                        },
+                    ))
                 }
                 _ => AppError::from(e),
-            },
-        )?;
+            })?;
         let trustline_required = !trustline_status.has_trustline;
 
         // 6. Generate quote_id and persist to Redis
@@ -407,8 +413,12 @@ impl OnrampQuoteService {
                 ))
             })?;
 
-        let platform_fee_bd = platform_fee.map(|r| r.fee).unwrap_or_else(|| BigDecimal::from(0));
-        let provider_fee_bd = provider_fee.map(|r| r.fee).unwrap_or_else(|| BigDecimal::from(0));
+        let platform_fee_bd = platform_fee
+            .map(|r| r.fee)
+            .unwrap_or_else(|| BigDecimal::from(0));
+        let provider_fee_bd = provider_fee
+            .map(|r| r.fee)
+            .unwrap_or_else(|| BigDecimal::from(0));
 
         if platform_fee_bd.is_zero() && provider_fee_bd.is_zero() {
             let total = self
@@ -444,18 +454,22 @@ impl OnrampQuoteService {
             .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
             .unwrap_or_else(|_| self.cngn_issuer.clone());
 
-        let account = self.stellar_client.get_account(&distribution_account).await.map_err(
-            |e| {
+        let account = self
+            .stellar_client
+            .get_account(&distribution_account)
+            .await
+            .map_err(|e| {
                 info!(
                     "Liquidity check skipped: could not fetch distribution account: {}",
                     e
                 );
-                AppError::new(AppErrorKind::External(crate::error::ExternalError::Blockchain {
-                    message: e.to_string(),
-                    is_retryable: true,
-                }))
-            },
-        )?;
+                AppError::new(AppErrorKind::External(
+                    crate::error::ExternalError::Blockchain {
+                        message: e.to_string(),
+                        is_retryable: true,
+                    },
+                ))
+            })?;
 
         let available = extract_cngn_balance(&account.balances, Some(&self.cngn_issuer));
         let available_bd: BigDecimal = available

@@ -1,8 +1,8 @@
+use std::sync::Arc;
 use Bitmesh_backend::chains::stellar::client::StellarClient;
 use Bitmesh_backend::chains::stellar::config::{StellarConfig, StellarNetwork};
 use Bitmesh_backend::chains::stellar::service::StellarBlockchainService;
 use Bitmesh_backend::chains::traits::{BlockchainService, MultiChainBalanceAggregator};
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

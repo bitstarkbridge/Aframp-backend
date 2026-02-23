@@ -3,6 +3,12 @@
 //! This file demonstrates how to use the Exchange Rate Service
 //! for fetching rates, calculating conversions, and managing historical data.
 
+#[cfg(feature = "database")]
+use bigdecimal::BigDecimal;
+#[cfg(feature = "database")]
+use sqlx::PgPool;
+#[cfg(feature = "database")]
+use std::sync::Arc;
 #[cfg(all(feature = "database", feature = "cache"))]
 use Bitmesh_backend::cache::cache::RedisCache;
 #[cfg(all(feature = "database", feature = "cache"))]
@@ -19,12 +25,6 @@ use Bitmesh_backend::services::exchange_rate::{
 use Bitmesh_backend::services::fee_structure::FeeStructureService;
 #[cfg(feature = "database")]
 use Bitmesh_backend::services::rate_providers::FixedRateProvider;
-#[cfg(feature = "database")]
-use bigdecimal::BigDecimal;
-#[cfg(feature = "database")]
-use sqlx::PgPool;
-#[cfg(feature = "database")]
-use std::sync::Arc;
 
 #[cfg(all(feature = "database", feature = "cache"))]
 #[tokio::main]
@@ -57,10 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fee_service = Arc::new(FeeStructureService::new(fee_repo));
     let rate_provider = Arc::new(FixedRateProvider::new());
 
-    let exchange_service = ExchangeRateService::new(rate_repo, ExchangeRateServiceConfig::default())
-        .with_cache(cache)
-        .add_provider(rate_provider)
-        .with_fee_service(fee_service);
+    let exchange_service =
+        ExchangeRateService::new(rate_repo, ExchangeRateServiceConfig::default())
+            .with_cache(cache)
+            .add_provider(rate_provider)
+            .with_fee_service(fee_service);
 
     // Example 1: Get current exchange rate
     println!("Example 1: Get Current Exchange Rate");
@@ -83,13 +84,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .calculate_conversion(onramp_request)
         .await?;
 
-    println!("User pays: {} {}", onramp_result.from_amount, onramp_result.from_currency);
+    println!(
+        "User pays: {} {}",
+        onramp_result.from_amount, onramp_result.from_currency
+    );
     println!("Base rate: {}", onramp_result.base_rate);
-    println!("Gross amount: {} {}", onramp_result.gross_amount, onramp_result.to_currency);
-    println!("Provider fee: {} {}", onramp_result.fees.provider_fee, onramp_result.to_currency);
-    println!("Platform fee: {} {}", onramp_result.fees.platform_fee, onramp_result.to_currency);
-    println!("Total fees: {} {}", onramp_result.fees.total_fees, onramp_result.to_currency);
-    println!("User receives: {} {}", onramp_result.net_amount, onramp_result.to_currency);
+    println!(
+        "Gross amount: {} {}",
+        onramp_result.gross_amount, onramp_result.to_currency
+    );
+    println!(
+        "Provider fee: {} {}",
+        onramp_result.fees.provider_fee, onramp_result.to_currency
+    );
+    println!(
+        "Platform fee: {} {}",
+        onramp_result.fees.platform_fee, onramp_result.to_currency
+    );
+    println!(
+        "Total fees: {} {}",
+        onramp_result.fees.total_fees, onramp_result.to_currency
+    );
+    println!(
+        "User receives: {} {}",
+        onramp_result.net_amount, onramp_result.to_currency
+    );
     println!("Quote expires at: {}", onramp_result.expires_at);
     println!("✓ Onramp conversion calculated\n");
 
@@ -107,13 +126,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .calculate_conversion(offramp_request)
         .await?;
 
-    println!("User sells: {} {}", offramp_result.from_amount, offramp_result.from_currency);
+    println!(
+        "User sells: {} {}",
+        offramp_result.from_amount, offramp_result.from_currency
+    );
     println!("Base rate: {}", offramp_result.base_rate);
-    println!("Gross amount: {} {}", offramp_result.gross_amount, offramp_result.to_currency);
-    println!("Provider fee: {} {}", offramp_result.fees.provider_fee, offramp_result.to_currency);
-    println!("Platform fee: {} {}", offramp_result.fees.platform_fee, offramp_result.to_currency);
-    println!("Total fees: {} {}", offramp_result.fees.total_fees, offramp_result.to_currency);
-    println!("User receives: {} {}", offramp_result.net_amount, offramp_result.to_currency);
+    println!(
+        "Gross amount: {} {}",
+        offramp_result.gross_amount, offramp_result.to_currency
+    );
+    println!(
+        "Provider fee: {} {}",
+        offramp_result.fees.provider_fee, offramp_result.to_currency
+    );
+    println!(
+        "Platform fee: {} {}",
+        offramp_result.fees.platform_fee, offramp_result.to_currency
+    );
+    println!(
+        "Total fees: {} {}",
+        offramp_result.fees.total_fees, offramp_result.to_currency
+    );
+    println!(
+        "User receives: {} {}",
+        offramp_result.net_amount, offramp_result.to_currency
+    );
     println!("Quote expires at: {}", offramp_result.expires_at);
     println!("✓ Offramp conversion calculated\n");
 
@@ -152,5 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(feature = "database"))]
 fn main() {
     println!("This example requires the 'database' and 'cache' features to be enabled.");
-    println!("Run with: cargo run --example exchange_rate_service_example --features database,cache");
+    println!(
+        "Run with: cargo run --example exchange_rate_service_example --features database,cache"
+    );
 }
