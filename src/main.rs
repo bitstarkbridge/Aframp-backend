@@ -479,14 +479,33 @@ async fn main() -> anyhow::Result<()> {
         let quote_service = std::sync::Arc::new(services::onramp_quote::OnrampQuoteService::new(
             exchange_rate_service,
             fee_service,
-            client,
-            cache,
+            client.clone(),
+            cache.clone(),
             cngn_issuer,
+        ));
+
+        // Setup onramp status service
+        let transaction_repo = std::sync::Arc::new(
+            database::transaction_repository::TransactionRepository::new(pool.clone()),
+        );
+        let payment_factory =
+            std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+                error!("Failed to initialize payment provider factory for onramp status: {}", e);
+                panic!("Cannot start without payment providers");
+            }));
+        
+        let status_service = std::sync::Arc::new(api::onramp::OnrampStatusService::new(
+            transaction_repo,
+            cache.clone(),
+            client,
+            payment_factory,
         ));
 
         Router::new()
             .route("/api/onramp/quote", post(create_onramp_quote))
             .with_state(quote_service)
+            .route("/api/onramp/status/:tx_id", get(api::onramp::get_onramp_status))
+            .with_state(status_service)
     } else {
         Router::new()
     };
