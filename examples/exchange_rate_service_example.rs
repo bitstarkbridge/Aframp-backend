@@ -26,7 +26,7 @@ use sqlx::PgPool;
 #[cfg(feature = "database")]
 use std::sync::Arc;
 
-#[cfg(feature = "database")]
+#[cfg(all(feature = "database", feature = "cache"))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
@@ -44,14 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
     let cache_config = CacheConfig {
         redis_url,
-        default_ttl: 60,
-        max_connections: 10,
+        ..Default::default()
     };
     let cache_pool = init_cache_pool(cache_config).await?;
     let cache = RedisCache::new(cache_pool);
 
     // Create repositories
-    let rate_repo = ExchangeRateRepository::new(pool.clone()).with_cache(cache.clone());
+    let rate_repo = ExchangeRateRepository::with_cache(pool.clone(), cache.clone());
     let fee_repo = FeeStructureRepository::new(pool.clone());
 
     // Create services

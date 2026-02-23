@@ -447,8 +447,8 @@ impl FeeCalculationService {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_amount_in_range() {
+    #[tokio::test]
+    async fn test_amount_in_range() {
         let amount = BigDecimal::from_str("10000").unwrap();
         let min = Some(BigDecimal::from_str("1000").unwrap());
         let max = Some(BigDecimal::from_str("50000").unwrap());

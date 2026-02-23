@@ -314,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
         };
         
         Router::new()
-            .route("/webhooks/:provider", post(api::webhooks::handle_webhook))
+            .route("/webhooks/{provider}", post(api::webhooks::handle_webhook))
             .with_state(std::sync::Arc::new(webhook_state))
     } else {
         info!("⏭️  Skipping webhook routes (no database)");

@@ -303,8 +303,10 @@ mod tests {
         let amount_mismatch = expected != actual;
 
         // 2. Check refund eligibility
-        let (eligible, reason) = RefundHandler::is_eligible_for_refund(0, 3, true, !amount_mismatch);
-        assert!(eligible && !amount_mismatch, "Should be eligible when amount mismatches");
+        let (eligible, reason) =
+            RefundHandler::is_eligible_for_refund(0, 3, true, !amount_mismatch);
+        assert!(eligible && amount_mismatch, "Should be eligible when amount mismatches");
+        assert_eq!(reason, "Amount mismatch detected");
 
         // 3. Format refund reason
         let reason_str = RefundHandler::format_refund_reason(

@@ -236,17 +236,17 @@ pub async fn verify_electricity(
         }
     }
 
-   pub fn detect_network(phone: &str) -> &'static str {
+    pub fn detect_network(phone: &str) -> &'static str {
         let phone = phone.trim();
-        let phone = if phone.starts_with("234") {
-            &phone[2..]
-        } else if phone.starts_with("+234") {
-            &phone[3..]
+        let normalized = if phone.starts_with("+234") {
+            format!("0{}", &phone[4..])
+        } else if phone.starts_with("234") {
+            format!("0{}", &phone[3..])
         } else {
-            phone
+            phone.to_string()
         };
 
-        let first_digits = phone.chars().take(3).collect::<String>();
+        let first_digits = normalized.chars().take(3).collect::<String>();
         match first_digits.as_str() {
             "080" | "081" | "090" | "091" => "MTN",
             "070" | "071" => "Airtel",

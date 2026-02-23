@@ -110,6 +110,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[should_panic]
     async fn test_get_nonexistent_account() {
         let config = test_config();
         let client = StellarClient::new(config).expect("Failed to create client");

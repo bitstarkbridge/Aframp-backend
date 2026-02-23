@@ -1776,7 +1776,7 @@ mod tests {
         assert_eq!(data_count, 4); // 4 networks
         assert_eq!(cable_count, 3); // DSTV, GOtv, Startimes
         
-        assert_eq!(providers.len(), 23); // Total
+        assert_eq!(providers.len(), 19); // Total (8 electricity + 4 airtime + 4 data + 3 cable)
     }
 
     #[test]
