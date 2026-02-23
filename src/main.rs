@@ -1,3 +1,4 @@
+mod api;
 mod cache;
 mod chains;
 mod config;
@@ -260,8 +261,136 @@ async fn main() -> anyhow::Result<()> {
         info!("Stellar transaction monitor worker disabled (TX_MONITOR_ENABLED=false)");
     }
 
+    // Initialize webhook processor and retry worker
+    let webhook_routes = if let Some(pool) = db_pool.clone() {
+        let webhook_repo = std::sync::Arc::new(database::webhook_repository::WebhookRepository::new(pool.clone()));
+        let provider_factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+            error!("Failed to initialize payment provider factory: {}", e);
+            panic!("Cannot start without payment providers");
+        }));
+        
+        // Create orchestrator for webhook processing
+        let transaction_repo = std::sync::Arc::new(database::transaction_repository::TransactionRepository::new(pool.clone()));
+        let orchestrator_config = services::payment_orchestrator::OrchestratorConfig::default();
+        
+        // Initialize providers for orchestrator
+        let mut providers = Vec::new();
+        for provider_name in provider_factory.list_available_providers() {
+            if let Ok(provider) = provider_factory.get_provider(provider_name) {
+                providers.push(std::sync::Arc::from(provider) as std::sync::Arc<dyn payments::provider::PaymentProvider>);
+            }
+        }
+        
+        let orchestrator = std::sync::Arc::new(services::payment_orchestrator::PaymentOrchestrator::new(
+            providers,
+            transaction_repo,
+            orchestrator_config,
+        ));
+        
+        let webhook_processor = std::sync::Arc::new(services::webhook_processor::WebhookProcessor::new(
+            webhook_repo,
+            provider_factory,
+            orchestrator,
+        ));
+        
+        // Start webhook retry worker
+        let webhook_retry_enabled = std::env::var("WEBHOOK_RETRY_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase() != "false";
+        
+        if webhook_retry_enabled {
+            let retry_worker = workers::webhook_retry::WebhookRetryWorker::new(
+                webhook_processor.clone(),
+                60, // Check every 60 seconds
+            );
+            tokio::spawn(async move {
+                retry_worker.run().await;
+            });
+            info!("✅ Webhook retry worker started");
+        }
+        
+        let webhook_state = api::webhooks::WebhookState {
+            processor: webhook_processor,
+        };
+        
+        Router::new()
+            .route("/webhooks/:provider", post(api::webhooks::handle_webhook))
+            .with_state(std::sync::Arc::new(webhook_state))
+    } else {
+        info!("⏭️  Skipping webhook routes (no database)");
+        Router::new()
+    };
+
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
+    
+    // Setup onramp routes (quote service)
+    let onramp_routes = if let (Some(pool), Some(cache), Some(client)) = (
+        db_pool.clone(),
+        redis_cache.clone(),
+        stellar_client.clone(),
+    ) {
+        let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
+            .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
+            .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
+
+        let rate_repo = database::exchange_rate_repository::ExchangeRateRepository::new(pool.clone());
+        let fee_repo = database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
+        let fee_service = std::sync::Arc::new(services::fee_structure::FeeStructureService::new(
+            fee_repo,
+        ));
+
+        let exchange_rate_service = std::sync::Arc::new(
+            services::exchange_rate::ExchangeRateService::new(
+                rate_repo,
+                services::exchange_rate::ExchangeRateServiceConfig::default(),
+            )
+            .with_cache(cache.clone())
+            .add_provider(std::sync::Arc::new(
+                services::rate_providers::FixedRateProvider::new(),
+            ))
+            .with_fee_service(fee_service.clone()),
+        );
+
+        let quote_service = std::sync::Arc::new(services::onramp_quote::OnrampQuoteService::new(
+            exchange_rate_service,
+            fee_service,
+            client,
+            cache,
+            cngn_issuer,
+        ));
+
+        Router::new()
+            .route("/api/onramp/quote", post(create_onramp_quote))
+            .with_state(quote_service)
+    } else {
+        Router::new()
+    };
+
+    // Setup wallet routes with balance service
+    let wallet_routes = if let (Some(client), Some(cache)) = (stellar_client.clone(), redis_cache.clone()) {
+        let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
+            .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
+        
+        let balance_service = std::sync::Arc::new(services::balance::BalanceService::new(
+            client,
+            cache,
+            cngn_issuer,
+        ));
+        
+        let wallet_state = api::wallet::WalletState { balance_service };
+        
+        Router::new()
+            .route("/api/wallet/balance", get(api::wallet::get_balance))
+            .with_state(wallet_state)
+    } else {
+        Router::new()
+    };
+    
+    // Bill payment providers routes (public endpoint - no auth required)
+    let bills_routes = Router::new()
+        .route("/api/bills/providers", get(api::bills::get_providers));
+    
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -296,6 +425,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/cngn/payments/sign", post(sign_cngn_payment))
         .route("/api/cngn/payments/submit", post(submit_cngn_payment))
         .route("/api/payments/initiate", post(initiate_payment))
+        .merge(onramp_routes)
+        .merge(wallet_routes)
+        .merge(webhook_routes)
+        .merge(bills_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
@@ -960,6 +1093,26 @@ async fn list_trustline_operations_by_wallet(
                 request_id,
             )
         })
+}
+
+async fn create_onramp_quote(
+    axum::extract::State(quote_service): axum::extract::State<std::sync::Arc<services::onramp_quote::OnrampQuoteService>>,
+    headers: axum::http::HeaderMap,
+    Json(payload): Json<services::onramp_quote::OnrampQuoteRequest>,
+) -> Result<
+    Json<services::onramp_quote::OnrampQuoteResponse>,
+    (
+        axum::http::StatusCode,
+        Json<middleware::error::ErrorResponse>,
+    ),
+> {
+    let request_id = middleware::error::get_request_id_from_headers(&headers);
+
+    quote_service
+        .create_quote(payload)
+        .await
+        .map(Json)
+        .map_err(|e| app_error_response(e, request_id))
 }
 
 async fn calculate_fee(
