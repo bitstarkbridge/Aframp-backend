@@ -557,6 +557,25 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
     
+    // Setup fees API routes with fee calculation service
+    let fees_routes = if let Some(pool) = db_pool.clone() {
+        use services::fee_calculation::FeeCalculationService;
+        
+        let fee_service = std::sync::Arc::new(FeeCalculationService::new(pool.clone()));
+        
+        let fees_state = api::fees::FeesState {
+            fee_service,
+            cache: redis_cache.clone(),
+        };
+        
+        Router::new()
+            .route("/api/fees", get(api::fees::get_fees))
+            .with_state(fees_state)
+    } else {
+        info!("⏭️  Skipping fees routes (no database)");
+        Router::new()
+    };
+    
     let app = Router::new()
         .route("/", get(root))
         .route("/health", get(health))
@@ -594,8 +613,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(onramp_routes)
         .merge(wallet_routes)
         .merge(rates_routes)
+        .merge(fees_routes)
         .merge(webhook_routes)
-        .merge(bills_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
