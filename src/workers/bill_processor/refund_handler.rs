@@ -51,26 +51,17 @@ impl RefundHandler {
         // Check various failure conditions
 
         if !amount_correct {
-            return (
-                true,
-                "Amount mismatch detected".to_string(),
-            );
+            return (true, "Amount mismatch detected".to_string());
         }
 
         if !account_valid {
-            return (
-                true,
-                "Account verification failed".to_string(),
-            );
+            return (true, "Account verification failed".to_string());
         }
 
         if retry_count >= max_retries {
             return (
                 true,
-                format!(
-                    "Max retry attempts ({}) exceeded",
-                    max_retries
-                ),
+                format!("Max retry attempts ({}) exceeded", max_retries),
             );
         }
 
@@ -83,9 +74,7 @@ impl RefundHandler {
             "amount_mismatch" => {
                 format!(
                     "Amount mismatch detected{}",
-                    details
-                        .map(|d| format!(": {}", d))
-                        .unwrap_or_default()
+                    details.map(|d| format!(": {}", d)).unwrap_or_default()
                 )
             }
             "account_invalid" => "Account verification failed".to_string(),
@@ -103,24 +92,21 @@ mod tests {
 
     #[test]
     fn test_refund_eligibility_amount_mismatch() {
-        let (eligible, reason) =
-            RefundHandler::is_eligible_for_refund(0, 3, true, false);
+        let (eligible, reason) = RefundHandler::is_eligible_for_refund(0, 3, true, false);
         assert!(eligible);
         assert_eq!(reason, "Amount mismatch detected");
     }
 
     #[test]
     fn test_refund_eligibility_max_retries() {
-        let (eligible, reason) =
-            RefundHandler::is_eligible_for_refund(3, 3, true, true);
+        let (eligible, reason) = RefundHandler::is_eligible_for_refund(3, 3, true, true);
         assert!(eligible);
         assert!(reason.contains("Max retry"));
     }
 
     #[test]
     fn test_refund_eligibility_not_eligible() {
-        let (eligible, reason) =
-            RefundHandler::is_eligible_for_refund(1, 3, true, true);
+        let (eligible, reason) = RefundHandler::is_eligible_for_refund(1, 3, true, true);
         assert!(!eligible);
     }
 

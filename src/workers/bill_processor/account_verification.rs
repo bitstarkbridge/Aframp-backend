@@ -1,7 +1,7 @@
 use super::providers::BillPaymentProvider;
 use super::types::{AccountInfo, ProcessingError, VerificationRequest};
-use tracing::{debug, error, info};
 use nuban;
+use tracing::{debug, error, info};
 
 /// Account verification logic for different bill types
 pub struct AccountVerifier;
@@ -22,7 +22,8 @@ impl AccountVerifier {
         // (10 digits) and provider_code is a 3-digit bank code or the account_type
         // indicates a bank account, validate locally before calling provider.
         if request.account_number.len() == 10
-            && (request.provider_code.chars().all(char::is_numeric) && request.provider_code.len() == 3
+            && (request.provider_code.chars().all(char::is_numeric)
+                && request.provider_code.len() == 3
                 || request.account_type.to_lowercase().contains("bank"))
         {
             let acct = request.account_number.as_str();
@@ -50,7 +51,7 @@ impl AccountVerifier {
         }
     }
 
-pub async fn verify_electricity(
+    pub async fn verify_electricity(
         provider: &dyn BillPaymentProvider,
         request: &VerificationRequest,
     ) -> Result<AccountInfo, ProcessingError> {
@@ -80,7 +81,11 @@ pub async fn verify_electricity(
         };
 
         let result = provider
-            .verify_account(&request.provider_code, &request.account_number, account_type)
+            .verify_account(
+                &request.provider_code,
+                &request.account_number,
+                account_type,
+            )
             .await?;
 
         if result.status.to_lowercase() != "active" {
@@ -108,7 +113,8 @@ pub async fn verify_electricity(
 
         if !Self::is_valid_nigerian_phone(phone) {
             return Err(ProcessingError::AccountVerificationFailed {
-                reason: "Invalid Nigerian phone format. Expected 080XXXXXXXX or 07XXXXXXXXX".to_string(),
+                reason: "Invalid Nigerian phone format. Expected 080XXXXXXXX or 07XXXXXXXXX"
+                    .to_string(),
             });
         }
 
@@ -175,7 +181,11 @@ pub async fn verify_electricity(
             .verify_account(
                 &request.provider_code,
                 smart_card,
-                if request.account_type.is_empty() { "postpaid" } else { &request.account_type },
+                if request.account_type.is_empty() {
+                    "postpaid"
+                } else {
+                    &request.account_type
+                },
             )
             .await?;
 
@@ -214,7 +224,11 @@ pub async fn verify_electricity(
             .verify_account(
                 &request.provider_code,
                 &request.account_number,
-                if request.account_type.is_empty() { "postpaid" } else { &request.account_type },
+                if request.account_type.is_empty() {
+                    "postpaid"
+                } else {
+                    &request.account_type
+                },
             )
             .await?;
 
@@ -236,17 +250,17 @@ pub async fn verify_electricity(
         }
     }
 
-   pub fn detect_network(phone: &str) -> &'static str {
+    pub fn detect_network(phone: &str) -> &'static str {
         let phone = phone.trim();
-        let phone = if phone.starts_with("234") {
-            &phone[2..]
-        } else if phone.starts_with("+234") {
-            &phone[3..]
+        let normalized = if phone.starts_with("+234") {
+            format!("0{}", &phone[4..])
+        } else if phone.starts_with("234") {
+            format!("0{}", &phone[3..])
         } else {
-            phone
+            phone.to_string()
         };
 
-        let first_digits = phone.chars().take(3).collect::<String>();
+        let first_digits = normalized.chars().take(3).collect::<String>();
         match first_digits.as_str() {
             "080" | "081" | "090" | "091" => "MTN",
             "070" | "071" => "Airtel",

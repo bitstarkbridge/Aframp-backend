@@ -31,6 +31,7 @@ use middleware::logging::{request_logging_middleware, UuidRequestId};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::signal;
 use tokio::sync::watch;
 use tower::ServiceBuilder;
@@ -87,10 +88,17 @@ async fn main() -> anyhow::Result<()> {
         "🚀 Starting Aframp backend service"
     );
 
+    let server_host = std::env::var("SERVER_HOST")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let server_port = std::env::var("SERVER_PORT")
+        .or_else(|_| std::env::var("PORT"))
+        .unwrap_or_else(|_| "8000".to_string());
+
     // Log configuration
     info!(
-        host = std::env::var("HOST").unwrap_or_else(|_| "unknown".to_string()),
-        port = std::env::var("PORT").unwrap_or_else(|_| "unknown".to_string()),
+        host = %server_host,
+        port = %server_port,
         "Server configuration loaded"
     );
 
@@ -102,8 +110,36 @@ async fn main() -> anyhow::Result<()> {
         info!("📊 Initializing database connection pool...");
         let database_url =
             std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL not set"))?;
+        let db_pool_config = PoolConfig {
+            max_connections: std::env::var("DB_MAX_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_connections: std::env::var("DB_MIN_CONNECTIONS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("DB_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("DB_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(600),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("DB_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(1800),
+            ),
+        };
 
-        let db_pool = init_pool(&database_url, Some(PoolConfig::default()))
+        let db_pool = init_pool(&database_url, Some(db_pool_config))
             .await
             .map_err(|e| {
                 error!("Failed to initialize database pool: {}", e);
@@ -128,7 +164,39 @@ async fn main() -> anyhow::Result<()> {
 
         let cache_config = CacheConfig {
             redis_url: redis_url.clone(),
-            ..Default::default()
+            max_connections: std::env::var("CACHE_MAX_CONNECTIONS")
+                .or_else(|_| std::env::var("REDIS_MAX_CONNECTIONS"))
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(20),
+            min_idle: std::env::var("REDIS_MIN_IDLE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            connection_timeout: Duration::from_secs(
+                std::env::var("REDIS_CONNECTION_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(5),
+            ),
+            max_lifetime: Duration::from_secs(
+                std::env::var("REDIS_MAX_LIFETIME")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(300),
+            ),
+            idle_timeout: Duration::from_secs(
+                std::env::var("REDIS_IDLE_TIMEOUT")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(60),
+            ),
+            health_check_interval: Duration::from_secs(
+                std::env::var("REDIS_HEALTH_CHECK_INTERVAL")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30),
+            ),
         };
 
         let cache_pool = init_cache_pool(cache_config).await.map_err(|e| {
@@ -229,9 +297,25 @@ async fn main() -> anyhow::Result<()> {
     info!("🏥 Initializing health checker...");
     let health_checker =
         HealthChecker::new(db_pool.clone(), redis_cache.clone(), stellar_client.clone());
-    info!("✅ Health checker initialized");
+    // Initialize notification service
+    let notification_service = std::sync::Arc::new(services::notification::NotificationService::new());
+
+    // Initialize payment provider factory
+    let provider_factory = if db_pool.is_some() {
+        info!("💳 Initializing payment provider factory...");
+        let factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+            error!("Failed to initialize payment provider factory: {}", e);
+            panic!("Cannot start without payment providers");
+        }));
+        info!("✅ Payment provider factory initialized");
+        Some(factory)
+    } else {
+        None
+    };
 
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
+    
+    // Start Transaction Monitor Worker
     let monitor_enabled = std::env::var("TX_MONITOR_ENABLED")
         .unwrap_or_else(|_| "true".to_string())
         .to_lowercase()
@@ -251,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
                 client,
                 monitor_config,
             );
-            monitor_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx)));
+            monitor_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx.clone())));
         } else {
             info!(
                 "Skipping Stellar transaction monitor worker (missing db pool or stellar client)"
@@ -261,43 +345,84 @@ async fn main() -> anyhow::Result<()> {
         info!("Stellar transaction monitor worker disabled (TX_MONITOR_ENABLED=false)");
     }
 
+    // Start Offramp Processor Worker
+    let offramp_enabled = std::env::var("OFFRAMP_PROCESSOR_ENABLED")
+        .unwrap_or_else(|_| "true".to_string())
+        .to_lowercase() != "false";
+    let mut offramp_handle = None;
+    if offramp_enabled {
+        if let (Some(pool), Some(client), Some(factory)) = (db_pool.clone(), stellar_client.clone(), provider_factory.clone()) {
+            let config = workers::offramp_processor::OfframpProcessorConfig::from_env();
+            if let Err(e) = config.validate() {
+                error!(error = %e, "Invalid offramp processor configuration, skipping worker");
+            } else {
+                info!(
+                    poll_interval_secs = config.poll_interval.as_secs(),
+                    batch_size = config.batch_size,
+                    "Starting offramp processor worker"
+                );
+                let worker = workers::offramp_processor::OfframpProcessorWorker::new(
+                    pool,
+                    client,
+                    factory,
+                    notification_service.clone(),
+                    config,
+                );
+                offramp_handle = Some(tokio::spawn(worker.run(worker_shutdown_rx.clone())));
+            }
+        } else {
+            info!("Skipping offramp processor worker (missing db pool, stellar client, or provider factory)");
+        }
+    } else {
+        info!("Offramp processor worker disabled (OFFRAMP_PROCESSOR_ENABLED=false)");
+    }
+
     // Initialize webhook processor and retry worker
     let webhook_routes = if let Some(pool) = db_pool.clone() {
-        let webhook_repo = std::sync::Arc::new(database::webhook_repository::WebhookRepository::new(pool.clone()));
-        let provider_factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
-            error!("Failed to initialize payment provider factory: {}", e);
-            panic!("Cannot start without payment providers");
-        }));
-        
+        let webhook_repo = std::sync::Arc::new(
+            database::webhook_repository::WebhookRepository::new(pool.clone()),
+        );
+        let provider_factory =
+            std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+                error!("Failed to initialize payment provider factory: {}", e);
+                panic!("Cannot start without payment providers");
+            }));
+
         // Create orchestrator for webhook processing
-        let transaction_repo = std::sync::Arc::new(database::transaction_repository::TransactionRepository::new(pool.clone()));
+        let transaction_repo = std::sync::Arc::new(
+            database::transaction_repository::TransactionRepository::new(pool.clone()),
+        );
         let orchestrator_config = services::payment_orchestrator::OrchestratorConfig::default();
-        
+
         // Initialize providers for orchestrator
         let mut providers = Vec::new();
         for provider_name in provider_factory.list_available_providers() {
             if let Ok(provider) = provider_factory.get_provider(provider_name) {
-                providers.push(std::sync::Arc::from(provider) as std::sync::Arc<dyn payments::provider::PaymentProvider>);
+                providers.push(std::sync::Arc::from(provider)
+                    as std::sync::Arc<dyn payments::provider::PaymentProvider>);
             }
         }
-        
-        let orchestrator = std::sync::Arc::new(services::payment_orchestrator::PaymentOrchestrator::new(
-            providers,
-            transaction_repo,
-            orchestrator_config,
-        ));
-        
-        let webhook_processor = std::sync::Arc::new(services::webhook_processor::WebhookProcessor::new(
-            webhook_repo,
-            provider_factory,
-            orchestrator,
-        ));
-        
+
+        let orchestrator =
+            std::sync::Arc::new(services::payment_orchestrator::PaymentOrchestrator::new(
+                providers,
+                transaction_repo,
+                orchestrator_config,
+            ));
+
+        let webhook_processor =
+            std::sync::Arc::new(services::webhook_processor::WebhookProcessor::new(
+                webhook_repo,
+                provider_factory,
+                orchestrator,
+            ));
+
         // Start webhook retry worker
         let webhook_retry_enabled = std::env::var("WEBHOOK_RETRY_ENABLED")
             .unwrap_or_else(|_| "true".to_string())
-            .to_lowercase() != "false";
-        
+            .to_lowercase()
+            != "false";
+
         if webhook_retry_enabled {
             let retry_worker = workers::webhook_retry::WebhookRetryWorker::new(
                 webhook_processor.clone(),
@@ -308,13 +433,13 @@ async fn main() -> anyhow::Result<()> {
             });
             info!("✅ Webhook retry worker started");
         }
-        
+
         let webhook_state = api::webhooks::WebhookState {
             processor: webhook_processor,
         };
-        
+
         Router::new()
-            .route("/webhooks/:provider", post(api::webhooks::handle_webhook))
+            .route("/webhooks/{provider}", post(api::webhooks::handle_webhook))
             .with_state(std::sync::Arc::new(webhook_state))
     } else {
         info!("⏭️  Skipping webhook routes (no database)");
@@ -323,22 +448,21 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
-    
+
     // Setup onramp routes (quote service)
-    let onramp_routes = if let (Some(pool), Some(cache), Some(client)) = (
-        db_pool.clone(),
-        redis_cache.clone(),
-        stellar_client.clone(),
-    ) {
+    let onramp_routes = if let (Some(pool), Some(cache), Some(client)) =
+        (db_pool.clone(), redis_cache.clone(), stellar_client.clone())
+    {
         let cngn_issuer = std::env::var("CNGN_ISSUER_ADDRESS")
             .or_else(|_| std::env::var("CNGN_ISSUER_MAINNET"))
             .unwrap_or_else(|_| "GXXXXDEFAULTISSUERXXXX".to_string());
 
-        let rate_repo = database::exchange_rate_repository::ExchangeRateRepository::new(pool.clone());
-        let fee_repo = database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
-        let fee_service = std::sync::Arc::new(services::fee_structure::FeeStructureService::new(
-            fee_repo,
-        ));
+        let rate_repo =
+            database::exchange_rate_repository::ExchangeRateRepository::new(pool.clone());
+        let fee_repo =
+            database::fee_structure_repository::FeeStructureRepository::new(pool.clone());
+        let fee_service =
+            std::sync::Arc::new(services::fee_structure::FeeStructureService::new(fee_repo));
 
         let exchange_rate_service = std::sync::Arc::new(
             services::exchange_rate::ExchangeRateService::new(
@@ -355,14 +479,33 @@ async fn main() -> anyhow::Result<()> {
         let quote_service = std::sync::Arc::new(services::onramp_quote::OnrampQuoteService::new(
             exchange_rate_service,
             fee_service,
-            client,
-            cache,
+            client.clone(),
+            cache.clone(),
             cngn_issuer,
+        ));
+
+        // Setup onramp status service
+        let transaction_repo = std::sync::Arc::new(
+            database::transaction_repository::TransactionRepository::new(pool.clone()),
+        );
+        let payment_factory =
+            std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+                error!("Failed to initialize payment provider factory for onramp status: {}", e);
+                panic!("Cannot start without payment providers");
+            }));
+        
+        let status_service = std::sync::Arc::new(api::onramp::OnrampStatusService::new(
+            transaction_repo,
+            cache.clone(),
+            client,
+            payment_factory,
         ));
 
         Router::new()
             .route("/api/onramp/quote", post(create_onramp_quote))
             .with_state(quote_service)
+            .route("/api/onramp/status/:tx_id", get(api::onramp::get_onramp_status))
+            .with_state(status_service)
     } else {
         Router::new()
     };
@@ -387,9 +530,32 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
     
-    // Bill payment providers routes (public endpoint - no auth required)
-    let bills_routes = Router::new()
-        .route("/api/bills/providers", get(api::bills::get_providers));
+    // Setup rates API routes with exchange rate service
+    let rates_routes = if let Some(pool) = db_pool.clone() {
+        use database::exchange_rate_repository::ExchangeRateRepository;
+        use services::exchange_rate::{ExchangeRateService, ExchangeRateServiceConfig};
+        
+        let repository = ExchangeRateRepository::new(pool.clone());
+        let config = ExchangeRateServiceConfig::default();
+        let mut exchange_rate_service = ExchangeRateService::new(repository, config);
+        
+        // Add cache to exchange rate service if available
+        if let Some(ref cache) = redis_cache {
+            exchange_rate_service = exchange_rate_service.with_cache(cache.clone());
+        }
+        
+        let rates_state = api::rates::RatesState {
+            exchange_rate_service: std::sync::Arc::new(exchange_rate_service),
+            cache: redis_cache.clone().map(std::sync::Arc::new),
+        };
+        
+        Router::new()
+            .route("/api/rates", get(api::rates::get_rates).options(api::rates::options_rates))
+            .with_state(rates_state)
+    } else {
+        info!("⏭️  Skipping rates routes (no database)");
+        Router::new()
+    };
     
     let app = Router::new()
         .route("/", get(root))
@@ -427,6 +593,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/payments/initiate", post(initiate_payment))
         .merge(onramp_routes)
         .merge(wallet_routes)
+        .merge(rates_routes)
         .merge(webhook_routes)
         .merge(bills_routes)
         .with_state(AppState {
@@ -445,9 +612,7 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Routes configured");
 
     // Run the server with graceful shutdown
-    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = std::env::var("PORT").unwrap_or_else(|_| "8000".to_string());
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    let addr: SocketAddr = format!("{}:{}", server_host, server_port).parse()?;
 
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
         error!("❌ Failed to bind to address {}: {}", addr, e);
@@ -467,11 +632,11 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "║  📡 Port:            {}                                  ║",
-        port
+        server_port
     );
     println!(
         "║  🏠 Host:            {}                            ║",
-        host
+        server_host
     );
     println!("║                                                              ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
@@ -482,6 +647,7 @@ async fn main() -> anyhow::Result<()> {
     println!("║  GET  /health/ready              - Readiness probe          ║");
     println!("║  GET  /health/live               - Liveness probe           ║");
     println!("║  GET  /api/stellar/account/{{address}} - Stellar account    ║");
+    println!("║  GET  /api/rates                 - Exchange rates (public)  ║");
     println!("║                                                              ║");
     println!("╠══════════════════════════════════════════════════════════════╣");
     println!("║                                                              ║");
@@ -496,7 +662,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         address = %addr,
-        port = %port,
+        port = %server_port,
         "🚀 Server listening on http://{}",
         addr
     );
@@ -511,6 +677,11 @@ async fn main() -> anyhow::Result<()> {
     if let Some(handle) = monitor_handle {
         if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
             error!(error = %e, "Timed out waiting for monitor worker shutdown");
+        }
+    }
+    if let Some(handle) = offramp_handle {
+        if let Err(e) = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+            error!(error = %e, "Timed out waiting for offramp worker shutdown");
         }
     }
 
@@ -1096,7 +1267,9 @@ async fn list_trustline_operations_by_wallet(
 }
 
 async fn create_onramp_quote(
-    axum::extract::State(quote_service): axum::extract::State<std::sync::Arc<services::onramp_quote::OnrampQuoteService>>,
+    axum::extract::State(quote_service): axum::extract::State<
+        std::sync::Arc<services::onramp_quote::OnrampQuoteService>,
+    >,
     headers: axum::http::HeaderMap,
     Json(payload): Json<services::onramp_quote::OnrampQuoteRequest>,
 ) -> Result<
